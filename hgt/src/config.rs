@@ -18,8 +18,9 @@ use std::path::Path;
 pub struct Costs {
     /// Staying alive for one tick. Default 4.
     pub upkeep: u32,
-    /// Carrying one gene for one tick. This is why hoarding every gene is not free, and
-    /// therefore why a gene has to be *useful* to stay in a population. Default 3.
+    /// Carrying one gene for one tick, on top of the trial cost of running it. This is
+    /// why hoarding is not free, and therefore why a gene that answers nothing decays out
+    /// of a population. Default 1.
     pub gene: u32,
     /// Running one gene against a stressor. Default 1.
     pub trial: u32,
@@ -33,7 +34,7 @@ pub struct Costs {
 
 impl Default for Costs {
     fn default() -> Costs {
-        Costs { upkeep: 4, gene: 3, trial: 1, conjugate: 6, integrate: 3, fission: 10 }
+        Costs { upkeep: 4, gene: 1, trial: 1, conjugate: 6, integrate: 3, fission: 10 }
     }
 }
 
@@ -134,8 +135,8 @@ pub struct HgtConfig {
 
     /// Per-byte substitution probability when a genome is copied at fission. Default 0.004.
     pub mutation_rate: f64,
-    /// Probability a mobile gene is dropped at fission (plasmids segregate badly).
-    /// Default 0.02.
+    /// Probability a mobile gene is dropped at fission — plasmids segregate badly, which
+    /// is how a gene nobody needs right now leaves a population. Default 0.005.
     pub plasmid_loss: f64,
 
     /// Number of strains — the restriction-modification barrier is between them. Default 4.
@@ -160,13 +161,18 @@ pub struct HgtConfig {
     pub lysis_damage: u32,
     /// Ticks a dead node's released fragments remain takeable. Default 30.
     pub fragment_ttl: u32,
+    /// A node gossips its peer list once every this many ticks, so peer lists survive the
+    /// deaths of the nodes in them. Default 16.
+    pub gossip_every: u32,
 
     /// Delivery delay in ticks for the simulated transport. Default 1.
     pub latency: u32,
     /// Probability the simulated transport drops a message. Default 0.0.
     pub loss: f64,
 
-    /// Founders seeded with the resistance gene for each *future* stressor. Default 1.
+    /// Founders seeded with the resistance gene for each *future* stressor. Two, not one,
+    /// so that a run does not turn on whether a single node happens to die early.
+    /// Default 2.
     pub founder_carriers: usize,
 
     /// Ticks between metric frames. Default 10.
@@ -199,7 +205,7 @@ impl Default for HgtConfig {
             vm_budget: 96,
 
             mutation_rate: 0.004,
-            plasmid_loss: 0.02,
+            plasmid_loss: 0.005,
 
             strains: 4,
             strain_drift: 0.01,
@@ -212,11 +218,12 @@ impl Default for HgtConfig {
             lysis_prob: 0.10,
             lysis_damage: 30,
             fragment_ttl: 30,
+            gossip_every: 16,
 
             latency: 1,
             loss: 0.0,
 
-            founder_carriers: 1,
+            founder_carriers: 2,
 
             analysis_every: 10,
             report_every: 50,
@@ -264,6 +271,9 @@ impl HgtConfig {
                 "fission_threshold ({}) exceeds energy_cap ({}), so nothing can ever divide",
                 self.fission_threshold, self.energy_cap
             );
+        }
+        if self.gossip_every == 0 {
+            bail!("gossip_every must be > 0");
         }
         if self.analysis_every == 0 || self.report_every == 0 {
             bail!("analysis_every and report_every must be > 0");

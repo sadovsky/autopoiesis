@@ -10,10 +10,12 @@
 //! fission matters — a node that cannot pay for its genome does not get to divide first.
 
 use crate::config::HgtConfig;
-use crate::event::{Cause, Event};
+use crate::event::{Cause, Event, Refusal};
 use crate::gene::{Acquisition, Carried, Gene, GeneId, NodeId};
 use crate::hazard::Environment;
 use crate::node::Node;
+use crate::protocol::{Envelope, Message};
+use crate::transport::{SimTransport, Transport};
 use anyhow::Result;
 use rand::{RngExt, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -41,6 +43,7 @@ pub struct World {
     pub env: Environment,
     pub nodes: BTreeMap<NodeId, Node>,
     pub stats: Stats,
+    pub transport: Box<dyn Transport>,
     next_id: NodeId,
     rng: Rng,
 }
@@ -51,6 +54,13 @@ impl World {
     /// and everyone else does not. Each epoch shift therefore starts as a rare gene in a
     /// doomed population, which is the situation the sandbox exists to watch.
     pub fn new(cfg: HgtConfig, seed: u64) -> Result<World> {
+        let transport = Box::new(SimTransport::new(cfg.latency, cfg.loss, seed));
+        World::with_transport(cfg, seed, transport)
+    }
+
+    /// The same world over a different network. `tcp.rs` hands in a socket-backed
+    /// transport; the tick loop cannot tell the difference.
+    pub fn with_transport(cfg: HgtConfig, seed: u64, transport: Box<dyn Transport>) -> Result<World> {
         cfg.validate()?;
         let env = Environment::new(&cfg, seed);
         let mut rng = Rng::seed_from_u64(seed);
@@ -93,6 +103,7 @@ impl World {
             env,
             nodes,
             stats: Stats { peak_population, ..Stats::default() },
+            transport,
             next_id,
             rng,
         })
@@ -194,12 +205,156 @@ impl World {
         events
     }
 
-    /// Transfer. Empty until the transport lands; the tick order is fixed around it now
-    /// so that adding mechanisms does not move anything else.
-    fn network_phase(&mut self, _tick: u32, _events: &mut Vec<Event>) {}
+    /// Transfer: deliver what has arrived, then let nodes initiate, in node-id order.
+    fn network_phase(&mut self, tick: u32, events: &mut Vec<Event>) {
+        self.transport.set_tick(tick);
+        for env in self.transport.deliver(tick) {
+            self.handle(env, tick, events);
+        }
+
+        let ids: Vec<NodeId> = self.nodes.keys().copied().collect();
+        for id in ids {
+            if self.cfg.gossip_every > 0 && (tick + id) % self.cfg.gossip_every == 0
+                && let Some(peer) = self.pick_peer(id)
+            {
+                let (strain, peers) = {
+                    let n = &self.nodes[&id];
+                    (n.strain, n.peers.clone())
+                };
+                self.transport.send(Envelope::new(id, peer, Message::Hello { strain, peers }));
+            }
+
+            if self.cfg.mechanisms.conjugation
+                && self.rng.random::<f64>() < self.cfg.conjugation_rate
+            {
+                self.conjugate(id);
+            }
+        }
+    }
+
+    /// Offer a peer everything mobile this node holds. The recipient decides what it
+    /// wants; a donor cannot push code into a node that did not ask for it.
+    fn conjugate(&mut self, id: NodeId) {
+        let Some(node) = self.nodes.get(&id) else { return };
+        if node.energy <= self.cfg.costs.conjugate {
+            return;
+        }
+        let genes: Vec<GeneId> = node.genome.mobile().map(|c| c.gene.id).collect();
+        if genes.is_empty() {
+            return;
+        }
+        let strain = node.strain;
+        let Some(target) = self.pick_peer(id) else { return };
+        self.transport.send(Envelope::new(id, target, Message::Offer { strain, genes }));
+    }
+
+    /// A live peer, or — if every peer this node knows is dead — any live node, which is
+    /// what a seed list or a rendezvous server does on a real network.
+    fn pick_peer(&mut self, id: NodeId) -> Option<NodeId> {
+        let live: Vec<NodeId> = self
+            .nodes
+            .get(&id)?
+            .peers
+            .iter()
+            .copied()
+            .filter(|p| *p != id && self.nodes.contains_key(p))
+            .collect();
+        if !live.is_empty() {
+            return Some(live[self.rng.random_range(0..live.len())]);
+        }
+        let others: Vec<NodeId> = self.nodes.keys().copied().filter(|p| *p != id).collect();
+        if others.is_empty() {
+            return None;
+        }
+        let pick = others[self.rng.random_range(0..others.len())];
+        if let Some(n) = self.nodes.get_mut(&id) {
+            n.peers.push(pick);
+        }
+        Some(pick)
+    }
+
+    fn handle(&mut self, env: Envelope, tick: u32, events: &mut Vec<Event>) {
+        let Envelope { from, to, msg } = env;
+        if !self.nodes.contains_key(&to) {
+            return;
+        }
+        match msg {
+            Message::Hello { strain: _, peers } => {
+                let cap = self.cfg.degree * 2;
+                let node = self.nodes.get_mut(&to).expect("checked above");
+                for p in std::iter::once(from).chain(peers) {
+                    if p != to && !node.peers.contains(&p) && node.peers.len() < cap {
+                        node.peers.push(p);
+                    }
+                }
+            }
+            Message::Offer { strain: _, genes } => {
+                if !self.cfg.mechanisms.conjugation {
+                    return;
+                }
+                let node = self.nodes.get(&to).expect("checked above");
+                let Some(want) = genes.into_iter().find(|g| !node.genome.contains(*g)) else {
+                    return;
+                };
+                self.transport.send(Envelope::new(to, from, Message::Request { gene: want }));
+            }
+            Message::Request { gene } => {
+                let node = self.nodes.get(&to).expect("checked above");
+                let Some(carried) = node.genome.get(gene) else { return };
+                if !carried.gene.mobile || node.energy <= self.cfg.costs.conjugate {
+                    return;
+                }
+                let payload = carried.gene.clone();
+                let strain = node.strain;
+                self.nodes.get_mut(&to).expect("checked above").spend(self.cfg.costs.conjugate);
+                let msg = Message::Transfer { strain, gene: payload, via: Acquisition::Conjugation };
+                self.transport.send(Envelope::new(to, from, msg));
+            }
+            Message::Transfer { strain, gene, via } => {
+                self.receive_gene(from, to, strain, gene, via, tick, events);
+            }
+            Message::Reject { .. } | Message::Eulogy { .. } | Message::Phage { .. } => {}
+        }
+    }
+
+    /// A gene has arrived. Whether it is kept is the recipient's decision, and every
+    /// outcome — including the refusals — is recorded: refusals are the denominator of
+    /// the barrier metric.
+    fn receive_gene(
+        &mut self,
+        from: NodeId,
+        to: NodeId,
+        donor_strain: u8,
+        gene: Gene,
+        via: Acquisition,
+        tick: u32,
+        events: &mut Vec<Event>,
+    ) {
+        let distance = Node::strain_distance(donor_strain, self.nodes[&to].strain);
+        self.stats.attempts += 1;
+        let refusal = if self.nodes[&to].genome.contains(gene.id) {
+            Some(Refusal::Redundant)
+        } else if self.nodes[&to].restricts(donor_strain, &self.cfg, &mut self.rng) {
+            Some(Refusal::Restricted)
+        } else if self.nodes[&to].energy <= self.cfg.costs.integrate {
+            Some(Refusal::Broke)
+        } else {
+            None
+        };
+        let gene_id = gene.id;
+        if refusal.is_none() {
+            let node = self.nodes.get_mut(&to).expect("checked by caller");
+            node.spend(self.cfg.costs.integrate);
+            node.genome.insert(Carried { gene, via, from: Some(from), since: tick });
+            self.stats.transfers += 1;
+            events.push(Event::Acquire { tick, node: to, gene: gene_id, via, from: Some(from) });
+        }
+        events.push(Event::Transfer { tick, from, to, gene: gene_id, via, distance, refusal });
+    }
 
     fn reap(&mut self, id: NodeId, tick: u32, cause: Cause, events: &mut Vec<Event>) {
         if self.nodes.remove(&id).is_some() {
+            self.transport.forget(id);
             events.push(Event::Death { tick, node: id, cause });
             self.stats.deaths += 1;
         }

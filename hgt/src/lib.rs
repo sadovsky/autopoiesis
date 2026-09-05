@@ -11,5 +11,7 @@ pub mod gene;
 pub mod hazard;
 pub mod isa;
 pub mod node;
+pub mod protocol;
+pub mod transport;
 pub mod vm;
 pub mod world;
