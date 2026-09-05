@@ -268,7 +268,7 @@ impl HgtConfig {
         if self.analysis_every == 0 || self.report_every == 0 {
             bail!("analysis_every and report_every must be > 0");
         }
-        if self.report_every % self.analysis_every != 0 {
+        if !self.report_every.is_multiple_of(self.analysis_every) {
             bail!(
                 "report_every ({}) must be a multiple of analysis_every ({})",
                 self.report_every, self.analysis_every

@@ -6,6 +6,10 @@
 //! a trait shows up in a node whose parent never had it.
 
 pub mod config;
+pub mod event;
 pub mod gene;
+pub mod hazard;
 pub mod isa;
+pub mod node;
 pub mod vm;
+pub mod world;
