@@ -189,6 +189,12 @@ pub struct HgtConfig {
     pub report_every: u32,
     /// Genes reported per frame, by carrier count. Default 10.
     pub report_top: usize,
+    /// Fraction of the live population that counts as a gene having swept. Default 0.9.
+    pub fixation_freq: f64,
+    /// Genes never reaching this many carriers are left out of the per-gene records —
+    /// most genes are one-off mutants and there is no point writing a line for each.
+    /// Default 8.
+    pub report_min_carriers: u32,
 
     pub mechanisms: Mechanisms,
     /// How nodes decide what to give and what to take. Default `always_accept`.
@@ -239,6 +245,8 @@ impl Default for HgtConfig {
             analysis_every: 10,
             report_every: 50,
             report_top: 10,
+            fixation_freq: 0.9,
+            report_min_carriers: 8,
 
             mechanisms: Mechanisms::default(),
             policy: Policy::AlwaysAccept,
@@ -299,6 +307,7 @@ impl HgtConfig {
         for (name, v) in [
             ("mutation_rate", self.mutation_rate),
             ("plasmid_loss", self.plasmid_loss),
+            ("fixation_freq", self.fixation_freq),
             ("strain_drift", self.strain_drift),
             ("restriction", self.restriction),
             ("conjugation_rate", self.conjugation_rate),

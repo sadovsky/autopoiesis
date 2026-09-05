@@ -10,6 +10,7 @@ pub mod event;
 pub mod gene;
 pub mod hazard;
 pub mod isa;
+pub mod metrics;
 pub mod node;
 pub mod protocol;
 pub mod transport;
