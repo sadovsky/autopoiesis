@@ -32,6 +32,8 @@ pub enum Refusal {
     Broke,
     /// The recipient's policy declined.
     Declined,
+    /// The recipient's genome was full of genes it had already proven.
+    Full,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -44,6 +46,9 @@ pub enum Event {
     Birth { tick: u32, node: NodeId, parent: Option<NodeId>, strain: u8, genes: Vec<GeneId> },
     /// A node acquired a gene *after* it was born — always laterally.
     Acquire { tick: u32, node: NodeId, gene: GeneId, via: Acquisition, from: Option<NodeId> },
+    /// A node dropped a gene to make room for another: its genome was full and this one
+    /// had never answered anything.
+    Lose { tick: u32, node: NodeId, gene: GeneId },
     /// A transfer attempt and its outcome, including the ones that were refused: the
     /// denominator for the barrier metric.
     Transfer {
@@ -66,6 +71,7 @@ impl Event {
             Event::Epoch { tick, .. }
             | Event::Birth { tick, .. }
             | Event::Acquire { tick, .. }
+            | Event::Lose { tick, .. }
             | Event::Transfer { tick, .. }
             | Event::Death { tick, .. }
             | Event::Tick { tick, .. } => tick,

@@ -13,12 +13,34 @@ use crate::gene::{Acquisition, Carried, Gene, GeneId, Genome, NodeId, mutate};
 use crate::hazard::Challenge;
 use crate::vm;
 use rand::RngExt;
+use serde::{Deserialize, Serialize};
+
+/// What a node does when it is offered a gene, and whether it offers its own. The
+/// sandbox is meant to host experiments rather than one model of behaviour, so the
+/// decision is a policy and not an `if` buried in the tick loop.
+#[derive(Serialize, Deserialize, clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+#[clap(rename_all = "snake_case")]
+pub enum Policy {
+    /// Take everything offered, offer everything held. The baseline.
+    #[default]
+    AlwaysAccept,
+    /// Take everything, offer nothing. Dying is not a choice, though: a selfish node's
+    /// genes still leak into the population when it starves, and a phage passing through
+    /// does not ask permission to move on.
+    Selfish,
+    /// Only trade with energy to spare — donating when comfortable, accepting only when
+    /// the integration cost is not the difference between living and dying.
+    Thrifty,
+}
 
 /// A gene released by a dead node, waiting to be taken up.
 #[derive(Clone, Debug)]
 pub struct Fragment {
     pub gene: Gene,
     pub from: NodeId,
+    /// The strain of the node that released it — the barrier applies to free DNA too.
+    pub strain: u8,
     /// Tick after which the fragment has decayed.
     pub expires: u32,
 }
@@ -82,11 +104,11 @@ impl Node {
     /// Meet the stressor: run genes in genome order until one answers, paying for each.
     /// A node with no answer takes damage; a node that runs out of energy part-way
     /// through simply stops trying, which is its own kind of death spiral.
-    pub fn face(&mut self, ch: &Challenge, cfg: &HgtConfig) -> Trial {
+    pub fn face(&mut self, ch: &Challenge, cfg: &HgtConfig, tick: u32) -> Trial {
         let mut tried = 0;
         let mut by = None;
         let codes: Vec<(GeneId, Vec<u8>)> =
-            self.genome.iter().map(|c| (c.gene.id, c.gene.code.clone())).collect();
+            self.genome.by_recent_use().iter().map(|c| (c.gene.id, c.gene.code.clone())).collect();
         for (id, code) in codes {
             if !self.alive() {
                 break;
@@ -99,7 +121,14 @@ impl Node {
             }
         }
         match by {
-            Some(_) => self.gain(cfg.reward, cfg.energy_cap),
+            Some(id) => {
+                if let Some(c) = self.genome.get_mut(id) {
+                    c.last_used = Some(tick);
+                    // It just answered a stressor: whatever it was, it works.
+                    c.proven = true;
+                }
+                self.gain(cfg.reward, cfg.energy_cap)
+            }
             None => self.spend(cfg.damage),
         }
         Trial { survived: by.is_some(), by, tried }
@@ -137,16 +166,13 @@ impl Node {
             if carried.gene.mobile && rng.random::<f64>() < cfg.plasmid_loss {
                 continue;
             }
-            let gene = match mutate(&carried.gene.code, cfg.mutation_rate, rng) {
-                Some(code) => Gene::new(code, child_id, tick, carried.gene.mobile),
-                None => carried.gene.clone(),
+            // A mutated copy is a new gene that nobody has ever seen work; an unchanged
+            // one carries its parent's standing.
+            let (gene, proven) = match mutate(&carried.gene.code, cfg.mutation_rate, rng) {
+                Some(code) => (Gene::new(code, child_id, tick, carried.gene.mobile), false),
+                None => (carried.gene.clone(), carried.proven),
             };
-            child.genome.insert(Carried {
-                gene,
-                via: Acquisition::Birth,
-                from: Some(self.id),
-                since: tick,
-            });
+            child.genome.insert(Carried::new(gene, Acquisition::Birth, Some(self.id), tick, proven));
         }
         child
     }
@@ -169,6 +195,23 @@ impl Node {
         rng.random::<f64>() < p
     }
 
+    /// Will this node offer its genes to anyone this tick?
+    pub fn will_donate(&self, policy: Policy, cfg: &HgtConfig) -> bool {
+        match policy {
+            Policy::AlwaysAccept => true,
+            Policy::Selfish => false,
+            Policy::Thrifty => self.energy >= cfg.fission_threshold / 2,
+        }
+    }
+
+    /// Will it take one that arrives?
+    pub fn will_accept(&self, policy: Policy, cfg: &HgtConfig) -> bool {
+        match policy {
+            Policy::AlwaysAccept | Policy::Selfish => true,
+            Policy::Thrifty => self.energy > cfg.damage + cfg.costs.integrate,
+        }
+    }
+
     /// Drop fragments that have decayed.
     pub fn expire_fragments(&mut self, tick: u32) {
         self.fragments.retain(|f| f.expires > tick);
@@ -184,12 +227,13 @@ mod tests {
 
     fn resistant_node(cfg: &HgtConfig, env: &Environment, kind: u8) -> Node {
         let mut n = Node::new(0, 0, cfg.energy_init, 0, None);
-        n.genome.insert(Carried {
-            gene: Gene::new(env.resistance_gene(kind), 0, 0, true),
-            via: Acquisition::Founder,
-            from: None,
-            since: 0,
-        });
+        n.genome.insert(Carried::new(
+            Gene::new(env.resistance_gene(kind), 0, 0, true),
+            Acquisition::Founder,
+            None,
+            0,
+            true,
+        ));
         n
     }
 
@@ -200,12 +244,12 @@ mod tests {
         let ch = env.challenge_at(0);
 
         let mut good = resistant_node(&cfg, &env, ch.kind);
-        let t = good.face(&ch, &cfg);
+        let t = good.face(&ch, &cfg, 0);
         assert!(t.survived && t.by.is_some(), "the compiled gene must answer: {t:?}");
         assert_eq!(good.energy, cfg.energy_init - cfg.costs.trial + cfg.reward);
 
         let mut wrong = resistant_node(&cfg, &env, (ch.kind + 1) % cfg.hazard_kinds);
-        let t = wrong.face(&ch, &cfg);
+        let t = wrong.face(&ch, &cfg, 0);
         assert!(!t.survived, "a gene for another stressor must not help");
         assert_eq!(wrong.energy, cfg.energy_init - cfg.costs.trial - cfg.damage);
     }

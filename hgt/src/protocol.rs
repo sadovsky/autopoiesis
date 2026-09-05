@@ -28,9 +28,10 @@ pub enum Message {
     /// "I could not take it, and why."
     Reject { gene: GeneId, reason: Refusal },
     /// A dying node's last broadcast: its genes, free for the taking.
-    Eulogy { genes: Vec<Gene> },
-    /// A phage: a gene travelling on its own, with hops left before it decays.
-    Phage { gene: Gene, origin: NodeId, hops: u32 },
+    Eulogy { strain: u8, genes: Vec<Gene> },
+    /// A phage: a gene travelling on its own, with hops left before it decays. It carries
+    /// the strain of the host that last packaged it, so the barrier still applies.
+    Phage { gene: Gene, origin: NodeId, strain: u8, hops: u32 },
 }
 
 /// A message with its addressing. `from` is asserted by the sender, exactly as it would

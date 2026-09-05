@@ -119,3 +119,85 @@ fn the_restriction_barrier_is_graded_by_strain_distance() {
         restricted[1], attempts[1]
     );
 }
+
+/// Each mechanism, alone, in a world under enough pressure that nodes die often — free
+/// DNA comes from the dead, so transformation has nothing to move until they do.
+fn pressured(mechanisms: Mechanisms) -> HgtConfig {
+    HgtConfig { nodes: 40, max_nodes: 120, epoch_ticks: 150, hazard_kinds: 3, ..cfg(mechanisms) }
+}
+
+#[test]
+fn every_mechanism_moves_genes_on_its_own_and_only_its_own() {
+    for (name, m) in [
+        ("conjugation", Mechanisms { conjugation: true, transformation: false, transduction: false }),
+        ("transformation", Mechanisms { conjugation: false, transformation: true, transduction: false }),
+        ("transduction", Mechanisms { conjugation: false, transformation: false, transduction: true }),
+    ] {
+        let c = pressured(m);
+        let gene = future_gene(&c, 3);
+        let (events, _) = run(c, 3, 700, gene);
+        let mut by_via = std::collections::BTreeMap::new();
+        for e in &events {
+            if let Event::Acquire { via, .. } = e {
+                *by_via.entry(via.name()).or_insert(0usize) += 1;
+            }
+        }
+        assert_eq!(
+            by_via.keys().copied().collect::<Vec<_>>(),
+            vec![name],
+            "with only {name} on, acquisitions were {by_via:?}"
+        );
+        assert!(by_via[name] > 0);
+    }
+}
+
+#[test]
+fn a_phage_carries_genes_it_was_never_sent_with() {
+    // A phage repackages whatever its new host holds, so the gene ids that arrive by
+    // transduction are not only the ones that started the journey.
+    let c = pressured(Mechanisms { conjugation: false, transformation: false, transduction: true });
+    let gene = future_gene(&c, 5);
+    let (events, _) = run(c, 5, 700, gene);
+    let carried: std::collections::BTreeSet<GeneId> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Acquire { via: Acquisition::Transduction, gene, .. } => Some(*gene),
+            _ => None,
+        })
+        .collect();
+    assert!(carried.len() > 1, "phages only ever delivered {} distinct gene(s)", carried.len());
+}
+
+#[test]
+fn a_selfish_node_never_donates_but_its_death_still_leaks_its_genes() {
+    // Policy governs what a node chooses to do. Dying is not a choice: a selfish node
+    // still releases its DNA when it starves, and a phage passing through does not ask.
+    use hgt::node::Policy;
+    let mut by_policy = Vec::new();
+    for policy in [Policy::AlwaysAccept, Policy::Selfish, Policy::Thrifty] {
+        let c = HgtConfig { policy, ..pressured(Mechanisms::default()) };
+        let gene = future_gene(&c, 8);
+        let (events, _) = run(c, 8, 700, gene);
+        let mut conjugated = 0;
+        let mut other = 0;
+        for e in &events {
+            if let Event::Acquire { via, .. } = e {
+                if *via == Acquisition::Conjugation {
+                    conjugated += 1;
+                } else {
+                    other += 1;
+                }
+            }
+        }
+        by_policy.push((policy, conjugated, other));
+    }
+    let get = |p: Policy| *by_policy.iter().find(|(q, _, _)| *q == p).unwrap();
+    assert_eq!(get(Policy::Selfish).1, 0, "a selfish node must never conjugate");
+    assert!(get(Policy::Selfish).2 > 0, "but its dead still leak genes into the population");
+    assert!(get(Policy::Thrifty).1 > 0, "a thrifty node trades when it can afford to");
+    assert!(
+        get(Policy::AlwaysAccept).1 >= get(Policy::Thrifty).1,
+        "an always-accept population conjugates at least as much: {} vs {}",
+        get(Policy::AlwaysAccept).1, get(Policy::Thrifty).1
+    );
+}

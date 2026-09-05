@@ -6,6 +6,7 @@
 //! the JSON loads, a hand-written `Default` so the defaults are literals you can read,
 //! and a `validate` that refuses nonsense before a run starts rather than during it.
 
+use crate::node::Policy;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -139,6 +140,12 @@ pub struct HgtConfig {
     /// is how a gene nobody needs right now leaves a population. Default 0.005.
     pub plasmid_loss: f64,
 
+    /// Genes a node can hold. Bounded because every mutated copy in flight is a new gene,
+    /// and an unbounded genome fills with junk until its upkeep starves the node. Taking
+    /// on a new gene evicts the most recently acquired one that has never answered
+    /// anything. Default 5.
+    pub max_genes: usize,
+
     /// Number of strains — the restriction-modification barrier is between them. Default 4.
     pub strains: u8,
     /// Probability a child's strain drifts from its parent's. Default 0.01.
@@ -184,6 +191,8 @@ pub struct HgtConfig {
     pub report_top: usize,
 
     pub mechanisms: Mechanisms,
+    /// How nodes decide what to give and what to take. Default `always_accept`.
+    pub policy: Policy,
 }
 
 impl Default for HgtConfig {
@@ -206,6 +215,8 @@ impl Default for HgtConfig {
 
             mutation_rate: 0.004,
             plasmid_loss: 0.005,
+
+            max_genes: 5,
 
             strains: 4,
             strain_drift: 0.01,
@@ -230,6 +241,7 @@ impl Default for HgtConfig {
             report_top: 10,
 
             mechanisms: Mechanisms::default(),
+            policy: Policy::AlwaysAccept,
         }
     }
 }
@@ -298,6 +310,9 @@ impl HgtConfig {
             if !(0.0..=1.0).contains(&v) {
                 bail!("{name} must be in [0, 1], got {v}");
             }
+        }
+        if self.max_genes == 0 {
+            bail!("max_genes must be > 0");
         }
         if self.strains == 0 {
             bail!("strains must be > 0");

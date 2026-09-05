@@ -104,7 +104,7 @@ impl Acquisition {
     }
 }
 
-/// A gene as held by one node, with its provenance.
+/// A gene as held by one node, with its provenance and its record of earning its keep.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Carried {
     pub gene: Gene,
@@ -113,6 +113,32 @@ pub struct Carried {
     pub from: Option<NodeId>,
     /// The tick this node acquired it.
     pub since: u32,
+    /// The last tick this gene answered a stressor in *this* node, if it ever has.
+    pub last_used: Option<u32>,
+    /// Whether this copy is known to work: it was seeded, it has answered something, or
+    /// it was inherited or received unchanged from a node for which one of those was
+    /// true. A copy that a mutation changed is not — every mutated copy is a new gene,
+    /// and most of them are junk. Only proven genes are offered to peers, which is what
+    /// keeps junk from flooding the network, while a spare gene that is useless *now*
+    /// still circulates freely.
+    pub proven: bool,
+}
+
+impl Carried {
+    pub fn new(gene: Gene, via: Acquisition, from: Option<NodeId>, tick: u32, proven: bool) -> Carried {
+        Carried { gene, via, from, since: tick, last_used: None, proven }
+    }
+}
+
+/// What happened when a gene was offered to a full genome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Insert {
+    /// Taken; if a gene had to go to make room, this is the one.
+    Inserted(Option<GeneId>),
+    /// Already held.
+    Duplicate,
+    /// No room, and nothing in the genome was expendable.
+    Full,
 }
 
 /// One node's genes, sorted by id.
@@ -151,13 +177,57 @@ impl Genome {
         self.genes.binary_search_by_key(&id, |c| c.gene.id).ok().map(|i| &self.genes[i])
     }
 
+    pub fn get_mut(&mut self, id: GeneId) -> Option<&mut Carried> {
+        match self.genes.binary_search_by_key(&id, |c| c.gene.id) {
+            Ok(i) => Some(&mut self.genes[i]),
+            Err(_) => None,
+        }
+    }
+
     pub fn ids(&self) -> impl Iterator<Item = GeneId> + '_ {
         self.genes.iter().map(|c| c.gene.id)
     }
 
-    /// The genes this node could donate.
+    /// The genes this node could donate: mobile, and worth mobilising. A node offers what
+    /// has worked for it, which is why a mutated copy that has never answered anything
+    /// dies with its host instead of flooding the network.
     pub fn mobile(&self) -> impl Iterator<Item = &Carried> + '_ {
-        self.genes.iter().filter(|c| c.gene.mobile)
+        self.genes.iter().filter(|c| c.gene.mobile && c.proven)
+    }
+
+    /// Genes in the order a node should try them: what worked most recently, first.
+    /// Deterministic — `last_used` ties break on gene id.
+    pub fn by_recent_use(&self) -> Vec<&Carried> {
+        let mut out: Vec<&Carried> = self.genes.iter().collect();
+        out.sort_by_key(|c| (std::cmp::Reverse(c.last_used), c.gene.id));
+        out
+    }
+
+    /// Insert into a genome with a size limit, evicting if it has to. What gets evicted
+    /// is the most recently acquired *unproven* gene — a fresh mutant nobody has ever
+    /// seen work. Genes known to work are never evicted, so a node keeps its spares.
+    pub fn insert_bounded(&mut self, carried: Carried, max: usize) -> Insert {
+        if self.contains(carried.gene.id) {
+            return Insert::Duplicate;
+        }
+        let mut evicted = None;
+        if self.genes.len() >= max {
+            let victim = self
+                .genes
+                .iter()
+                .filter(|c| !c.proven)
+                .max_by_key(|c| (c.since, c.gene.id))
+                .map(|c| c.gene.id);
+            match victim {
+                Some(id) => {
+                    self.remove(id);
+                    evicted = Some(id);
+                }
+                None => return Insert::Full,
+            }
+        }
+        self.insert(carried);
+        Insert::Inserted(evicted)
     }
 
     /// Insert unless already held. Returns false if the gene was already there — a
@@ -237,7 +307,7 @@ mod tests {
         let mut g = Genome::new();
         for code in [vec![9], vec![1], vec![5]] {
             let gene = Gene::new(code, 0, 0, true);
-            assert!(g.insert(Carried { gene, via: Acquisition::Founder, from: None, since: 0 }));
+            assert!(g.insert(Carried::new(gene, Acquisition::Founder, None, 0, true)));
         }
         let ids: Vec<GeneId> = g.ids().collect();
         let mut sorted = ids.clone();
@@ -245,7 +315,7 @@ mod tests {
         assert_eq!(ids, sorted, "genome must not depend on arrival order");
 
         let dup = Gene::new(vec![5], 3, 7, true);
-        assert!(!g.insert(Carried { gene: dup, via: Acquisition::Conjugation, from: Some(3), since: 7 }));
+        assert!(!g.insert(Carried::new(dup, Acquisition::Conjugation, Some(3), 7, true)));
         assert_eq!(g.len(), 3);
     }
 
