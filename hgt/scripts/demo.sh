@@ -15,6 +15,7 @@ ONLY=${ONLY:-}
 PROCESSES=${PROCESSES:-4}
 BASE_PORT=${BASE_PORT:-9400}
 SEARCH_TICKS=${SEARCH_TICKS:-10000}
+SEARCH_SEEDS=${SEARCH_SEEDS:-0..16}
 
 cargo build --release --quiet -p hgt
 BIN=target/release/hgt
@@ -37,15 +38,48 @@ run ab bash -c "
 "
 
 # 2. Can a gene be *found* rather than received? Founders start a known number of bit
-#    flips from a gene that works, with one stressor that never shifts.
+#    flips from a gene that works, with one stressor that never shifts. The third arm
+#    shares genes nobody has seen work, which is the only way transfer can help a search:
+#    a half-finished gene is not offered otherwise.
+#    (This section and the two after it are the slow ones — a quarter of an hour.)
 run discovery bash -c "
   set -euo pipefail
   for bits in 4 8 12 16; do
     for m in none all; do
       $BIN --config hgt/configs/search.json --ticks $SEARCH_TICKS --founder-miss-bits \$bits \
-           --hgt \$m sweep --seeds $SEEDS --out $OUT/search/bits\${bits}_\$m 2>&1 \
+           --hgt \$m sweep --seeds $SEARCH_SEEDS --out $OUT/search/bits\${bits}_\$m 2>&1 \
         | sed \"s/^/  \$bits bits, \$m: /\"
     done
+    $BIN --config hgt/configs/search.json --ticks $SEARCH_TICKS --founder-miss-bits \$bits \
+         --hgt all --offer-unproven sweep --seeds $SEARCH_SEEDS \
+         --out $OUT/search/bits\${bits}_all_unproven 2>&1 \
+      | sed \"s/^/  \$bits bits, all+unproven: /\"
+  done
+"
+
+# 2b. Where is the horizon, and what is it made of? A wrong key bit costs a sixteenth of
+#     the gene's credit and can be walked back; a wrong rotation costs everything at once
+#     and cannot. One bit of rotation error is a lucky flip away; two is a valley.
+run rotation bash -c "
+  set -euo pipefail
+  for r in 1 2; do
+    $BIN --config hgt/configs/search.json --ticks $SEARCH_TICKS --founder-miss-bits 0 \
+         --founder-miss-rot \$r --hgt all sweep --seeds $SEARCH_SEEDS \
+         --out $OUT/rotation/rot\${r}_key0 2>&1 | sed \"s/^/  rot \$r, key 0: /\"
+  done
+  $BIN --config hgt/configs/search.json --ticks $SEARCH_TICKS --founder-miss-bits 4 \
+       --founder-miss-rot 1 --hgt all sweep --seeds $SEARCH_SEEDS \
+       --out $OUT/rotation/rot1_key4 2>&1 | sed \"s/^/  rot 1, key 4: /\"
+"
+
+# 2c. Does splicing an arriving gene into a resident copy help? It is the only way two
+#     lineages' partial answers can be combined.
+run recombination bash -c "
+  set -euo pipefail
+  for bits in 4 8 12 16; do
+    $BIN --config hgt/configs/search.json --ticks $SEARCH_TICKS --founder-miss-bits \$bits \
+         --hgt all --offer-unproven --recombination-rate 0.3 sweep --seeds $SEARCH_SEEDS \
+         --out $OUT/recombination/bits\${bits}_r03 2>&1 | sed \"s/^/  \$bits bits, recomb: /\"
   done
 "
 

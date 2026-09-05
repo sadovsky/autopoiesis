@@ -211,6 +211,59 @@ mod tests {
     }
 
     #[test]
+    fn credit_falls_a_sixteenth_per_wrong_key_bit_and_vanishes_at_sixteen() {
+        // The shape of the landscape, stated exactly: a gene whose key is `d` bits wrong
+        // emits an answer `d` bits wrong, and scores (16 - d)/16. At d = 16 it is at
+        // chance, which is where the search horizon is — not a mystery, a subtraction.
+        let cfg = HgtConfig::default();
+        let env = Environment::new(&cfg, 4);
+        let (key, rot) = env.secret(0);
+        let payload = env.payload_at(11);
+        let answer = env.answer(0, payload);
+        for d in [0u32, 1, 4, 8, 12, 16] {
+            let mut mask = 0u32;
+            for i in 0..d {
+                mask |= 1 << ((i * 7 + 3) % 32);
+            }
+            let code = compile_resistance(key ^ mask, rot);
+            let got = vm::run(&code, payload, 0, cfg.vm_budget).answer.expect("it emits");
+            let expected = ((16.0 - d as f64) / 16.0).max(0.0);
+            assert!(
+                (score(got, answer) - expected).abs() < 1e-12,
+                "{d} wrong key bits scored {} not {expected}",
+                score(got, answer)
+            );
+        }
+    }
+
+    #[test]
+    fn a_wrong_rotation_earns_nothing_however_right_the_key_is() {
+        // The other half of the landscape: rotation is flat. Every rotation but the right
+        // one scrambles the whole answer, so there is no gradient to climb towards it —
+        // it has to be hit, and only then does the key gradient exist.
+        let cfg = HgtConfig::default();
+        let env = Environment::new(&cfg, 4);
+        let (key, rot) = env.secret(0);
+        let mut worst: f64 = 0.0;
+        for wrong in 0..16u8 {
+            if wrong == rot {
+                continue;
+            }
+            let code = compile_resistance(key, wrong);
+            let mean: f64 = (0..32u32)
+                .map(|t| {
+                    let payload = env.payload_at(t);
+                    let got = vm::run(&code, payload, 0, cfg.vm_budget).answer.expect("it emits");
+                    score(got, env.answer(0, payload))
+                })
+                .sum::<f64>()
+                / 32.0;
+            worst = worst.max(mean);
+        }
+        assert!(worst < 0.2, "a wrong rotation averaged {worst} credit — that is a gradient");
+    }
+
+    #[test]
     fn solving_is_about_the_function_not_the_bytes() {
         let cfg = HgtConfig::default();
         let env = Environment::new(&cfg, 9);

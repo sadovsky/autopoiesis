@@ -26,6 +26,9 @@ pub struct Acquisitions {
     pub conjugation: u64,
     pub transformation: u64,
     pub transduction: u64,
+    /// Of the lateral ones, how many were a splice of the arrival with a resident copy —
+    /// a program that existed nowhere until the moment it was integrated.
+    pub spliced: u64,
 }
 
 impl Acquisitions {
@@ -422,11 +425,14 @@ impl Analyzer {
                 self.ancestry_index.insert(*node, self.trees.ancestry.len());
                 self.trees.ancestry.push((*node, *parent, *tick, None));
             }
-            Event::Acquire { tick, node, gene, via, from } => {
+            Event::Acquire { tick, node, gene, via, from, spliced } => {
                 if let Some(state) = self.nodes.get_mut(node)
                     && state.genes.insert(*gene, *via).is_none()
                 {
                     self.gain(*gene, *node, *tick, *via);
+                    if *spliced {
+                        self.acquisitions.spliced += 1;
+                    }
                     if via.is_lateral()
                         && let Some(donor) = from
                     {

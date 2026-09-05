@@ -45,16 +45,37 @@ sideways rather than inheriting it.
 
 ## Can a gene be found rather than received?
 
-| run | seeds | found it | median tick found | novel programs | answerers at the end, where found |
-|---|---|---|---|---|---|
-| bits12_all | 16 | 6 | 3540 | 518 | 6 |
-| bits12_none | 16 | 3 | 6620 | 75 | 0 |
-| bits16_all | 16 | 0 | - | 0 | - |
-| bits16_none | 16 | 0 | - | 0 | - |
-| bits4_all | 16 | 12 | 1320 | 1760 | 7 |
-| bits4_none | 16 | 7 | 3300 | 359 | 0 |
-| bits8_all | 16 | 10 | 2700 | 1253 | 8 |
-| bits8_none | 16 | 9 | 3600 | 476 | 0 |
+| run | seeds | found it | median tick found | novel programs | splices | answerers at the end, where found |
+|---|---|---|---|---|---|---|
+| bits12_all | 16 | 6 | 3540 | 518 | 0 | 6 |
+| bits12_all_unproven | 16 | 8 | 3970 | 653 | 0 | 2 |
+| bits12_none | 16 | 3 | 6620 | 75 | 0 | 0 |
+| bits16_all | 16 | 0 | - | 0 | 0 | - |
+| bits16_all_unproven | 16 | 0 | - | 0 | 0 | - |
+| bits16_none | 16 | 0 | - | 0 | 0 | - |
+| bits4_all | 16 | 12 | 1320 | 1760 | 0 | 7 |
+| bits4_all_unproven | 16 | 16 | 1430 | 1764 | 0 | 2 |
+| bits4_none | 16 | 7 | 3300 | 359 | 0 | 0 |
+| bits8_all | 16 | 10 | 2700 | 1253 | 0 | 8 |
+| bits8_all_unproven | 16 | 13 | 3280 | 624 | 0 | 0 |
+| bits8_none | 16 | 9 | 3600 | 476 | 0 | 0 |
+
+## What is the search horizon made of?
+
+| run | seeds | found it | median tick found | novel programs | splices | answerers at the end, where found |
+|---|---|---|---|---|---|---|
+| rot1_key0 | 16 | 12 | 200 | 1958 | 0 | 20 |
+| rot1_key4 | 16 | 12 | 1390 | 1481 | 0 | 12 |
+| rot2_key0 | 16 | 0 | - | 0 | 0 | - |
+
+## Does splicing genes on transfer help?
+
+| run | seeds | found it | median tick found | novel programs | splices | answerers at the end, where found |
+|---|---|---|---|---|---|---|
+| bits12_r03 | 16 | 6 | 4230 | 769 | 263216 | 30 |
+| bits16_r03 | 16 | 0 | - | 0 | 0 | - |
+| bits4_r03 | 16 | 15 | 1520 | 2869 | 276124 | 5 |
+| bits8_r03 | 16 | 11 | 2220 | 1760 | 272648 | 12 |
 
 ## Do free riders take over?
 

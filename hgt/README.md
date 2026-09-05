@@ -162,6 +162,11 @@ accepts. It is a heritable trait of a node, not a setting of the run: children i
 donors to see what happens. Dying is not a choice, so a selfish node's genes still leak
 when it starves.
 
+`recombination_rate` pairs transfer with **recombination**: an accepted gene is spliced
+into a resident copy at a crossover point, so what is integrated is a program neither node
+had. Without it a gene is taken whole or not at all, and every improvement has to be walked
+to by one lineage alone.
+
 The network itself is a scenario knob: `partition_at` splits it in two and
 `partition_heal_at` puts it back. Which side a node is on is a pure function of its id, so
 nodes born during a partition need nobody to assign them.
@@ -245,25 +250,58 @@ redundant:
 never shifts, an income a population can search on, and founders a known number of bit
 flips from a gene that works. 16 seeds, 10000 ticks.
 
-| distance from a working gene | without transfer | with transfer |
+| distance | no transfer | transfer, proven genes only | transfer, unproven shared |
+|---|---|---|---|
+| 4 bits | 7/16 found, tick 3300 | 12/16, 1320 | 16/16, 1430 |
+| 8 bits | 9/16, 3600 | 10/16, 2700 | 13/16, 3280 |
+| 12 bits | 3/16, 6620 | 6/16, 3540 | 8/16, 3970 |
+| 16 bits | 0/16 | 0/16 | 0/16 |
+
+Yes, up to a horizon — and transfer helps, but only once it is allowed to move things that
+do not work yet. A node offers a gene when it has seen it work, so a half-finished answer
+is nobody's to give; `--offer-unproven` lifts that, and it finds the gene in every seed at
+4 bits and in half again as many at 12. What it does *not* do is keep it: the last column
+of the full table is nodes still able to answer at the end of the run, and sharing junk
+along with the half-answers leaves 0-2 of them against 6-8 when only proven genes move.
+Sharing everything explores; sharing what works consolidates.
+
+**What is the horizon made of?** Two different things, and only one of them is a slope.
+
+A gene whose key is `d` bits wrong emits an answer `d` bits wrong and scores `(16-d)/16`
+— that is arithmetic, and `tests/hazard.rs` asserts it. At `d = 16` the answer is at
+chance and the slope is gone, which is exactly where the search stops working. The other
+half is the rotation, and it is flat: every wrong rotation scrambles the whole answer, so
+no key is worth more than any other until the rotation is right.
+
+| founders start | found it | median tick |
 |---|---|---|
-| 4 bits | 7/16 found, median tick 3300 | 12/16 found, median tick 1320 |
-| 8 bits | 9/16, 3600 | 10/16, 2700 |
-| 12 bits | 3/16, 6620 | 6/16, 3540 |
+| rotation 1 bit wrong, key correct | 12/16 | 200 |
+| rotation 1 bit wrong, key 4 bits wrong | 12/16 | 1390 |
+| rotation 2 bits wrong, key correct | 0/16 | never |
+
+One bit of rotation error is a single lucky flip away and takes 200 ticks. Two bits is a
+valley — the intermediate state pays nothing, so nothing selects for crossing it — and in
+sixteen seeds and ten thousand ticks nobody ever crosses it. The population is not
+searching a hard problem badly; it is searching a smooth problem that has a cliff nested
+inside it, which is a fair description of most real fitness landscapes.
+
+**Does splicing genes on transfer help?** `recombination_rate` splices an arriving gene
+into a resident copy at a crossover point, so what gets integrated is a program neither
+node had. It is the only way two lineages' partial answers can combine.
+
+| distance | shared, no splicing | shared, splicing at 0.3 |
+|---|---|---|
+| 4 bits | 16/16 found, 2 answerers at the end | 15/16, 5 |
+| 8 bits | 13/16, 0 | 11/16, 12 |
+| 12 bits | 8/16, 2 | 6/16, 30 |
 | 16 bits | 0/16 | 0/16 |
 
-Yes, up to a horizon. Four bit flips away a lineage walks to the answer in a few thousand
-ticks; sixteen away nobody ever does, in any seed, with or without help. Transfer finds it
-sooner and in more seeds at every distance where it is findable at all — but the sharper
-difference is in the last column of the full table: at the end of a run, the number of
-nodes able to answer is **zero** without transfer and six to eight with it. Discovery is
-vertical, and it happens in one lineage; whether the population *keeps* what that lineage
-found is lateral.
-
-Nothing is offered until it works, so before the first discovery there is nothing for
-transfer to move — the runs where no gene is ever found show zero transfers, in both
-columns. Transfer cannot help you search. It can only stop you losing what the search
-turned up.
+Not as a search. Splicing finds the gene in slightly fewer seeds — it breaks as many
+half-answers as it completes — and it does nothing at all beyond the horizon, where there
+is no gradient for a hybrid to be better *at*. What it changes is what happens afterwards:
+where an answer is found, five to fifteen times as many nodes still hold one at the end of
+the run. Recombination is not a better way of finding things. It is a ratchet: partial
+copies keep reconstituting the answer, so the population stops losing it.
 
 **Do free riders take over?** Eight of forty-eight founders start `selfish` — they accept
 genes and offer none — and policy is inherited.
@@ -343,9 +381,12 @@ like when the genes arrive too late.
   and re-deriving from the log agree exactly; a lossy network is still repeatable
   (`tests/determinism.rs`)
 * a population climbs to a gene nobody gave it, and cannot on a flat landscape; policy is
-  inherited and drifts; an immune memory cuts phages and costs the genes they carried; the
-  transfer graph is empty without a mechanism and every edge in it joins the family tree
-  sideways (`tests/evolution.rs`)
+  inherited and drifts; an immune memory cuts phages and costs the genes they carried;
+  splicing produces programs neither side had; the transfer graph is empty without a
+  mechanism and every edge in it joins the family tree sideways (`tests/evolution.rs`)
+* the landscape is the shape the results claim it is: credit falls exactly a sixteenth per
+  wrong key bit and reaches chance at sixteen, and no wrong rotation earns credit at any
+  key distance (`src/hazard.rs`)
 * a split network bottlenecks harder than a whole one and reports itself split
   (`tests/transport.rs`)
 * a gene crosses a real socket unchanged; a deme founded with no spare genes survives on
@@ -373,9 +414,9 @@ with `--config`.
 ## Things deliberately not done
 
 No fitness function beyond surviving the stressor, and no reward for anything a node does
-to another. No recombination inside a gene — transfer moves whole genes, mutation flips
-single bits, and nothing is ever inserted or deleted, so every gene is exactly as long as
-the one it came from. No genuine sandboxing claim beyond the interpreter's own limits: the
+to another. Recombination is one crossover point and nothing else: no double crossover, no
+homology search for where the two copies line up, and nothing is ever inserted or deleted,
+so every gene is exactly as long as the one it came from. No genuine sandboxing claim beyond the interpreter's own limits: the
 VM is safe because it is tiny, not because it is hardened. No attempt to make the TCP path
 deterministic, and no global observer over it — each process measures its own deme,
 because in a real distributed system that is all anyone has. The renderer has never been

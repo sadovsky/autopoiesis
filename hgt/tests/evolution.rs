@@ -291,3 +291,48 @@ fn the_two_trees_disagree_exactly_where_a_gene_moved_sideways() {
     assert!(tsv.starts_with("tick\tgene\tfrom\tto\tvia\n"));
     assert_eq!(tsv.lines().count(), trees.transfers.len() + 1, "one row per transfer, plus a header");
 }
+
+#[test]
+fn recombination_builds_a_program_neither_side_had() {
+    // Transfer without recombination can only move a gene whole: every improvement has to
+    // be walked to by one lineage alone. With it, an arrival is spliced into a resident
+    // copy, and what gets integrated is a program that existed nowhere before.
+    let cfg = |recombination_rate: f64| HgtConfig {
+        nodes: 32,
+        max_nodes: 96,
+        epoch_ticks: 150,
+        hazard_kinds: 3,
+        hazard_gradient: 0.0,
+        recombination_rate,
+        mechanisms: Mechanisms::default(),
+        ..HgtConfig::default()
+    };
+
+    let run = |recombination_rate: f64| {
+        let mut world = World::new(cfg(recombination_rate), 4).expect("valid config");
+        let (mut spliced, mut whole) = (0, 0);
+        for _ in 0..400 {
+            for e in world.step() {
+                if let Event::Acquire { spliced: is_splice, .. } = e {
+                    if is_splice {
+                        spliced += 1;
+                    } else {
+                        whole += 1;
+                    }
+                }
+            }
+            if world.extinct() {
+                break;
+            }
+        }
+        (spliced, whole)
+    };
+
+    let (off, off_whole) = run(0.0);
+    assert_eq!(off, 0, "with recombination off, an arriving gene is kept whole or not at all");
+    assert!(off_whole > 0, "genes should still be moving");
+
+    let (on, on_whole) = run(0.5);
+    assert!(on > 0, "with it on, transfers should be producing new programs");
+    assert!(on_whole > 0, "and half of them should still arrive whole");
+}

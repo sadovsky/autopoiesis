@@ -105,7 +105,8 @@ impl World {
                     node.genome.insert(Carried::new(gene, Acquisition::Founder, None, 0, false));
                 }
                 FounderGenes::NearMiss => {
-                    let gene = Gene::new(near_miss(&env, 0, cfg.founder_miss_bits), id, 0, true);
+                    let code = near_miss(&env, 0, cfg.founder_miss_bits, cfg.founder_miss_rot);
+                    let gene = Gene::new(code, id, 0, true);
                     node.genome.insert(Carried::new(gene, Acquisition::Founder, None, 0, false));
                 }
             }
@@ -608,14 +609,43 @@ impl World {
         } else {
             None
         };
+        // Recombination: what is integrated may be a splice of the arrival and something
+        // the recipient already holds, rather than the arrival itself.
+        let mut gene = gene;
+        let mut recombined = false;
+        // The rate check comes first so that a run with recombination off draws nothing
+        // here: an unused draw would shift every later random decision in the run.
+        if refusal.is_none()
+            && self.cfg.recombination_rate > 0.0
+            && self.rng.random::<f64>() < self.cfg.recombination_rate
+        {
+            let residents: Vec<Vec<u8>> =
+                self.nodes[&to].genome.iter().map(|c| c.gene.code.clone()).collect();
+            if !residents.is_empty() {
+                let pick = self.rng.random_range(0..residents.len());
+                if let Some(code) = crate::gene::recombine(&residents[pick], &gene.code, &mut self.rng)
+                {
+                    gene = Gene::new(code, to, tick, gene.mobile);
+                    recombined = true;
+                }
+            }
+        }
+        let refusal = if recombined && self.nodes[&to].genome.contains(gene.id) {
+            // The splice happened to reproduce something already held.
+            Some(Refusal::Redundant)
+        } else {
+            refusal
+        };
+
         let gene_id = gene.id;
         let mut refusal = refusal;
         if refusal.is_none() {
             let max = self.cfg.max_genes;
             let node = self.nodes.get_mut(&to).expect("checked above");
             // Donors only offer genes known to work, so an arriving gene carries that
-            // standing with it.
-            let carried = Carried::new(gene, via, Some(from), tick, true);
+            // standing with it — but a splice is a new program nobody has seen work.
+            let code = gene.code.clone();
+            let carried = Carried::new(gene, via, Some(from), tick, !recombined);
             match node.genome.insert_bounded(carried, max) {
                 Insert::Inserted(evicted) => {
                     node.spend(self.cfg.costs.integrate);
@@ -623,7 +653,17 @@ impl World {
                     if let Some(lost) = evicted {
                         events.push(Event::Lose { tick, node: to, gene: lost });
                     }
-                    events.push(Event::Acquire { tick, node: to, gene: gene_id, via, from: Some(from) });
+                    events.push(Event::Acquire {
+                        tick,
+                        node: to,
+                        gene: gene_id,
+                        via,
+                        from: Some(from),
+                        spliced: recombined,
+                    });
+                    if recombined {
+                        self.note_discovery(to, gene_id, &code, tick, events);
+                    }
                 }
                 Insert::Duplicate => refusal = Some(Refusal::Redundant),
                 Insert::Full => refusal = Some(Refusal::Full),
@@ -635,6 +675,30 @@ impl World {
 
     /// Remove a dead node. If transformation is on it broadcasts its mobile genes to its
     /// peers on the way out: a population keeps what its dead knew for a while.
+    /// Did this new program answer a stressor the node holding it could not answer
+    /// before? That is what a discovery is, whether the program came from a mutation at
+    /// birth or a splice at the moment of transfer.
+    fn note_discovery(
+        &mut self,
+        node: NodeId,
+        gene: GeneId,
+        code: &[u8],
+        tick: u32,
+        events: &mut Vec<Event>,
+    ) {
+        let budget = self.cfg.vm_budget;
+        let Some(kind) = self.env.solved_kind(code, budget) else { return };
+        let already = self.nodes.get(&node).is_some_and(|n| {
+            n.genome.iter().any(|c| c.gene.id != gene && self.env.solves(&c.gene.code, kind, budget))
+        });
+        if already {
+            return;
+        }
+        let novel = gene != crate::gene::fnv1a(&self.env.resistance_gene(kind));
+        events.push(Event::Discovery { tick, node, gene, kind, novel });
+        self.stats.discoveries += 1;
+    }
+
     fn reap(&mut self, id: NodeId, tick: u32, events: &mut Vec<Event>) {
         let cause = if self.lysed.contains(&id) { Cause::Lysed } else { Cause::Starved };
         self.reap_with(id, tick, cause, events);
@@ -717,16 +781,24 @@ struct Arrival {
     via: Acquisition,
 }
 
-/// A resistance gene with `bits` bits flipped in its key: a program that is a known
-/// distance from working. The flipped positions are spread across the key rather than
-/// adjacent, so the distance is a distance and not one broken nibble.
-fn near_miss(env: &Environment, kind: u8, bits: u32) -> Vec<u8> {
+/// A resistance gene a known distance from working: `bits` bits flipped in its key and
+/// `rot_bits` in its rotation. The flipped positions are spread out rather than adjacent,
+/// so the distance is a distance and not one broken nibble.
+///
+/// The two distances are not the same kind of wrong. A wrong key bit costs a sixteenth of
+/// the gene's credit and can be walked back one flip at a time; a wrong rotation costs
+/// everything at once, because it moves every bit of the answer.
+pub fn near_miss(env: &Environment, kind: u8, bits: u32, rot_bits: u32) -> Vec<u8> {
     let (key, rot) = env.secret(kind);
     let mut mask = 0u32;
     for i in 0..bits.min(32) {
         mask |= 1 << ((i * 7 + 3) % 32);
     }
-    crate::hazard::compile_resistance(key ^ mask, rot)
+    let mut rot_mask = 0u8;
+    for i in 0..rot_bits.min(4) {
+        rot_mask |= 1 << ((i * 3 + 1) % 4);
+    }
+    crate::hazard::compile_resistance(key ^ mask, (rot ^ rot_mask) & 0x0F)
 }
 
 /// A founder's copy of a compiled resistance gene. Mobile, so it can be donated: a gene

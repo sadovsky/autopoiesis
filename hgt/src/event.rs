@@ -59,8 +59,17 @@ pub enum Event {
     },
     /// The network split, or healed.
     Network { tick: u32, partitioned: bool },
-    /// A node acquired a gene *after* it was born — always laterally.
-    Acquire { tick: u32, node: NodeId, gene: GeneId, via: Acquisition, from: Option<NodeId> },
+    /// A node acquired a gene *after* it was born — always laterally. `spliced` marks the
+    /// ones that are a recombination of the arrival with something the node already held:
+    /// a program neither side had, so the gene id is nobody's copy.
+    Acquire {
+        tick: u32,
+        node: NodeId,
+        gene: GeneId,
+        via: Acquisition,
+        from: Option<NodeId>,
+        spliced: bool,
+    },
     /// A mutated copy answers a stressor its parent could not: an answer that was found
     /// rather than inherited or received. A variant of something the parent already had
     /// is not a discovery, whatever its bytes — nothing was found. `novel` says whether

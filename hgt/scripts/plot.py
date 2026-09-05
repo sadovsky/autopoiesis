@@ -142,12 +142,13 @@ def discovery_table(experiments):
         # Only the runs that found something have an answerer count worth reporting; the
         # rest are zero by construction and would drag the median to zero.
         answerers = median([s["solvers"][0] for s in found if s.get("solvers")])
+        spliced = sum(s.get("spliced", 0) for s in summaries)
         rows.append(
             [name, len(summaries), len(found), f"{median(firsts):.0f}" if firsts else "-",
-             novel, f"{answerers:.0f}" if firsts else "-"]
+             novel, spliced, f"{answerers:.0f}" if firsts else "-"]
         )
     return table(
-        ["run", "seeds", "found it", "median tick found", "novel programs",
+        ["run", "seeds", "found it", "median tick found", "novel programs", "splices",
          "answerers at the end, where found"],
         rows,
     )
@@ -297,6 +298,8 @@ def main():
 
     for name, title, fn in [
         ("search", "## Can a gene be found rather than received?", discovery_table),
+        ("rotation", "## What is the search horizon made of?", discovery_table),
+        ("recombination", "## Does splicing genes on transfer help?", discovery_table),
         ("policy", "## Do free riders take over?", policy_table),
         ("immunity", "## What does an immune system buy, and cost?", immunity_table),
         ("partition", "## What does cutting the network cost?", partition_table),

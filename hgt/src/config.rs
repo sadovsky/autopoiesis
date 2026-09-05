@@ -168,6 +168,13 @@ pub struct HgtConfig {
     /// them, so a gene that guessed well once does not out-compete one that computes the
     /// answer. More probes cost proportionally more energy in trials. Default 1.
     pub probes: u32,
+    /// Probability that an accepted gene is spliced with one the recipient already holds
+    /// rather than kept whole: a crossover point is chosen, the resident copy supplies the
+    /// prefix and the arrival the suffix. This is what pairs horizontal transfer with
+    /// recombination, and it is the only way two lineages' partial answers can be
+    /// combined — without it a gene is either taken or not, and every improvement has to
+    /// be walked to by one lineage alone. Default 0.0.
+    pub recombination_rate: f64,
     /// Offer peers every mobile gene, including ones nobody has seen work. Every mutated
     /// copy in flight is a new gene, so this floods the network with junk that recipients
     /// pay upkeep on — which is exactly why the default is false, and why it is a knob
@@ -239,8 +246,15 @@ pub struct HgtConfig {
 
     /// What founders start with.
     pub founder_genes: FounderGenes,
-    /// How far from working a `near_miss` founder's gene starts, in bit flips. Default 8.
+    /// How far from working a `near_miss` founder's gene starts: bit flips in the key it
+    /// carries. Each flipped bit costs the gene 1/16th of its credit, so at 16 the gene
+    /// scores exactly at chance and there is nothing left to climb. Default 8.
     pub founder_miss_bits: u32,
+    /// Bit flips in the *rotation* a `near_miss` gene applies, 0..4. A wrong rotation
+    /// scrambles the whole answer rather than part of it, so it earns no credit at any
+    /// key distance: it is a flat sub-problem nested inside the smooth one, and has to be
+    /// hit by luck before the key gradient exists at all. Default 0.
+    pub founder_miss_rot: u32,
     /// Founders seeded with the resistance gene for each *future* stressor. Two, not one,
     /// so that a run does not turn on whether a single node happens to die early.
     /// Default 2.
@@ -290,6 +304,7 @@ impl Default for HgtConfig {
             epoch_ticks: 300,
             vm_budget: 96,
             hazard_gradient: 0.6,
+            recombination_rate: 0.0,
             offer_unproven: false,
             probes: 1,
             proven_credit: 0.9,
@@ -322,6 +337,7 @@ impl Default for HgtConfig {
 
             founder_genes: FounderGenes::Seeded,
             founder_miss_bits: 8,
+            founder_miss_rot: 0,
             founder_carriers: 2,
 
             analysis_every: 10,
@@ -405,6 +421,7 @@ impl HgtConfig {
             ("transduction_rate", self.transduction_rate),
             ("lysis_prob", self.lysis_prob),
             ("crispr_rate", self.crispr_rate),
+            ("recombination_rate", self.recombination_rate),
             ("loss", self.loss),
             ("partition_frac", self.partition_frac),
         ] {

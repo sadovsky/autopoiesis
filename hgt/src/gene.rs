@@ -251,6 +251,24 @@ impl Genome {
     }
 }
 
+/// Splice two genes at one crossover point: `resident` supplies everything before it and
+/// `arrival` everything after. The result is a new gene — a program neither node had —
+/// which is the point: it is how two lineages' partial answers combine instead of one
+/// having to walk the whole distance alone.
+///
+/// Genes are all the same length here, but the shorter one bounds the cut in case that
+/// ever stops being true.
+pub fn recombine<R: RngExt>(resident: &[u8], arrival: &[u8], rng: &mut R) -> Option<Vec<u8>> {
+    let bound = resident.len().min(arrival.len());
+    if bound < 2 {
+        return None;
+    }
+    let point = rng.random_range(1..bound);
+    let mut out = resident[..point].to_vec();
+    out.extend_from_slice(&arrival[point..]);
+    (out != resident && out != arrival).then_some(out)
+}
+
 /// Copy `code`, flipping one bit in each byte that mutates, at probability `rate` per
 /// byte. Returns `None` if nothing changed, so callers can keep the parent's gene
 /// identity rather than re-hashing.
@@ -338,6 +356,24 @@ mod tests {
         for (a, b) in code.iter().zip(&m) {
             assert!((a ^ b).count_ones() <= 1, "a point mutation flips one bit: {a:08b} -> {b:08b}");
         }
+    }
+
+    #[test]
+    fn recombination_makes_a_gene_neither_side_had() {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(12);
+        let resident = vec![0u8; 16];
+        let arrival = vec![0xffu8; 16];
+        let hybrid = recombine(&resident, &arrival, &mut rng).expect("two different genes splice");
+        assert_eq!(hybrid.len(), 16);
+        assert_ne!(hybrid, resident);
+        assert_ne!(hybrid, arrival);
+        // Everything up to the cut is the resident's and everything after is the arrival's.
+        let cut = hybrid.iter().position(|b| *b == 0xff).expect("some of the arrival survives");
+        assert!(hybrid[..cut].iter().all(|b| *b == 0));
+        assert!(hybrid[cut..].iter().all(|b| *b == 0xff));
+        // Splicing a gene with itself produces nothing new.
+        assert_eq!(recombine(&resident, &resident, &mut rng), None);
+        assert_eq!(recombine(&[1], &[2], &mut rng), None, "there is nowhere to cut one byte");
     }
 
     #[test]
