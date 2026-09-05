@@ -14,6 +14,7 @@
 use crate::config::HgtConfig;
 use crate::event::{Cause, Event, Refusal};
 use crate::gene::{Acquisition, GeneId, NodeId, short_id};
+use crate::node::Policy;
 use crate::hazard::Environment;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,6 +52,7 @@ pub struct Refusals {
     pub broke: u64,
     pub declined: u64,
     pub full: u64,
+    pub immune: u64,
 }
 
 /// Transfer attempts and successes at one strain distance: the barrier, measured.
@@ -63,6 +65,26 @@ pub struct BarrierRow {
     /// gene. Phages retry indiscriminately, so without this the barrier's effect is
     /// buried under redundant traffic.
     pub redundant: u64,
+}
+
+/// How the live population is divided between ways of behaving. A heritable trait, so
+/// this is the answer to "does a free rider take over?".
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Policies {
+    pub always_accept: u32,
+    pub selfish: u32,
+    pub thrifty: u32,
+}
+
+/// The two halves of a split network, counted separately. A partition is only
+/// interesting if the sides can be seen to fare differently.
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sides {
+    pub here: u32,
+    pub there: u32,
+    /// Nodes on each side holding a gene that answers the current stressor.
+    pub here_solvers: u32,
+    pub there_solvers: u32,
 }
 
 /// One gene's standing in the live population.
@@ -96,13 +118,30 @@ pub struct FrameRecord {
     pub genome_mean: f64,
     /// Share of all gene copies now held that were acquired laterally.
     pub lateral_share: f64,
-    /// The gene answering each stressor kind, and how far it has spread.
+    /// Is the network split in two right now?
+    pub partitioned: bool,
+    pub sides: Sides,
+    /// How far the two sides' gene pools have drifted apart: one minus the Jaccard
+    /// similarity of the sets of genes present on each side. Reported whether or not a
+    /// partition is in force, so the rise while cut and the fall after healing are both
+    /// visible.
+    pub divergence: f64,
+    /// The seeded gene answering each stressor kind, and how far it has spread.
     pub resistance: Vec<GeneRow>,
+    /// Carriers of *any* gene known to answer each stressor — the seeded one plus every
+    /// variant discovered since. This is the number that says whether the population can
+    /// meet a stressor at all.
+    pub solvers: Vec<u32>,
+    /// Mutated genes found to answer a stressor, cumulative, and how many of those were
+    /// a different program rather than a rediscovery of the seeded bytes.
+    pub discoveries: u64,
+    pub novel_discoveries: u64,
     /// The commonest genes, whatever they are.
     pub top: Vec<GeneRow>,
     pub acquisitions: Acquisitions,
     pub refusals: Refusals,
     pub barrier: Vec<BarrierRow>,
+    pub policies: Policies,
 }
 
 /// One epoch: the unit the A/B is read in. Did the population survive the shift, and how
@@ -157,10 +196,15 @@ pub enum Record {
     Gene(Box<GeneRecord>),
 }
 
+fn resistance_map(resistance: &[GeneId]) -> BTreeMap<GeneId, u8> {
+    resistance.iter().enumerate().map(|(k, g)| (*g, k as u8)).collect()
+}
+
 #[derive(Clone, Debug, Default)]
 struct NodeState {
     /// Gene id → how *this* node got it.
     genes: BTreeMap<GeneId, Acquisition>,
+    policy: Policy,
 }
 
 #[derive(Clone, Debug)]
@@ -174,6 +218,97 @@ struct GeneStat {
     lateral: u64,
     fixed_at: Option<u32>,
     extinct_at: Option<u32>,
+}
+
+/// The two graphs this sandbox exists to compare: who descended from whom, and who
+/// *gave* what to whom. In a world without transfer the second is empty and a gene's
+/// history is a subtree of the first; every edge in it is a place where the two disagree.
+#[derive(Clone, Debug, Default)]
+pub struct Trees {
+    /// (node, parent, born, died) for every node that ever lived.
+    pub ancestry: Vec<(NodeId, Option<NodeId>, u32, Option<u32>)>,
+    /// (tick, gene, donor, recipient, mechanism) for every lateral acquisition.
+    pub transfers: Vec<(u32, GeneId, NodeId, NodeId, Acquisition)>,
+}
+
+impl Trees {
+    /// The ancestry as tab-separated rows.
+    pub fn ancestry_tsv(&self) -> String {
+        let mut out = String::from("node\tparent\tborn\tdied\n");
+        for (node, parent, born, died) in &self.ancestry {
+            let parent = parent.map_or(String::from("-"), |p| p.to_string());
+            let died = died.map_or(String::from("-"), |d| d.to_string());
+            out.push_str(&format!("{node}\t{parent}\t{born}\t{died}\n"));
+        }
+        out
+    }
+
+    /// Lateral transfers as tab-separated rows: the edges that are not in the tree.
+    pub fn transfers_tsv(&self) -> String {
+        let mut out = String::from("tick\tgene\tfrom\tto\tvia\n");
+        for (tick, gene, from, to, via) in &self.transfers {
+            out.push_str(&format!("{tick}\t{}\t{from}\t{to}\t{}\n", short_id(*gene), via.name()));
+        }
+        out
+    }
+
+    /// The ancestry as Newick, one line per founder — the format every tree viewer reads.
+    /// Branch lengths are lifespans in ticks. Built with an explicit stack, because a
+    /// long run's lineages are deeper than a comfortable recursion.
+    pub fn newick(&self) -> String {
+        let mut children: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        let mut info: BTreeMap<NodeId, (u32, Option<u32>)> = BTreeMap::new();
+        let mut roots = Vec::new();
+        for (node, parent, born, died) in &self.ancestry {
+            info.insert(*node, (*born, *died));
+            match parent {
+                Some(p) => children.entry(*p).or_default().push(*node),
+                None => roots.push(*node),
+            }
+        }
+        let length = |node: NodeId, info: &BTreeMap<NodeId, (u32, Option<u32>)>| -> u32 {
+            match info.get(&node) {
+                Some((born, Some(died))) => died.saturating_sub(*born),
+                Some(_) => 0,
+                None => 0,
+            }
+        };
+
+        let mut out = String::new();
+        for root in roots {
+            // Post-order without recursion: push a node, then its children; on the way
+            // back up, fold each finished child list into its parent's string.
+            let mut stack = vec![(root, false)];
+            let mut done: BTreeMap<NodeId, String> = BTreeMap::new();
+            while let Some((node, expanded)) = stack.pop() {
+                let kids = children.get(&node).cloned().unwrap_or_default();
+                if !expanded && !kids.is_empty() {
+                    stack.push((node, true));
+                    for kid in kids {
+                        stack.push((kid, false));
+                    }
+                    continue;
+                }
+                let kids = children.get(&node).cloned().unwrap_or_default();
+                let label = format!("n{node}:{}", length(node, &info));
+                let text = if kids.is_empty() {
+                    label
+                } else {
+                    let inner: Vec<String> = kids
+                        .iter()
+                        .map(|k| done.remove(k).unwrap_or_else(|| format!("n{k}:0")))
+                        .collect();
+                    format!("({}){label}", inner.join(","))
+                };
+                done.insert(node, text);
+            }
+            if let Some(text) = done.remove(&root) {
+                out.push_str(&text);
+                out.push_str(";\n");
+            }
+        }
+        out
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -198,6 +333,16 @@ pub struct Analyzer {
     epoch_ticks: u32,
     /// The compiled resistance gene for each stressor kind, derived from (config, seed).
     resistance: Vec<GeneId>,
+    /// Every gene id known to answer each stressor: the seeded one, plus discoveries.
+    solving: BTreeMap<GeneId, u8>,
+    discoveries: u64,
+    novel_discoveries: u64,
+    partitioned: bool,
+    partition_frac: f64,
+    trees: Trees,
+    /// Where each node's row lives in `trees.ancestry`, so recording a death is a lookup
+    /// rather than a scan of every node that ever lived.
+    ancestry_index: BTreeMap<NodeId, usize>,
     nodes: BTreeMap<NodeId, NodeState>,
     genes: BTreeMap<GeneId, GeneStat>,
     acquisitions: Acquisitions,
@@ -213,9 +358,10 @@ pub struct Analyzer {
 impl Analyzer {
     pub fn new(cfg: &HgtConfig, seed: u64) -> Analyzer {
         let env = Environment::new(cfg, seed);
-        let resistance = (0..env.kinds())
+        let resistance: Vec<GeneId> = (0..env.kinds())
             .map(|k| crate::gene::fnv1a(&env.resistance_gene(k)))
             .collect();
+        let solving = resistance_map(&resistance);
         Analyzer {
             seed,
             analysis_every: cfg.analysis_every,
@@ -224,6 +370,13 @@ impl Analyzer {
             fixation_freq: cfg.fixation_freq,
             epoch_ticks: cfg.epoch_ticks,
             resistance,
+            solving,
+            discoveries: 0,
+            novel_discoveries: 0,
+            partitioned: false,
+            partition_frac: cfg.partition_frac,
+            trees: Trees::default(),
+            ancestry_index: BTreeMap::new(),
             nodes: BTreeMap::new(),
             genes: BTreeMap::new(),
             acquisitions: Acquisitions::default(),
@@ -241,9 +394,14 @@ impl Analyzer {
         self.nodes.len()
     }
 
-    /// Which stressor a gene answers, if any.
+    /// The family tree and the transfer graph, for export.
+    pub fn trees(&self) -> &Trees {
+        &self.trees
+    }
+
+    /// Which stressor a gene answers, if any — including one discovered mid-run.
     fn resists(&self, gene: GeneId) -> Option<u8> {
-        self.resistance.iter().position(|g| *g == gene).map(|i| i as u8)
+        self.solving.get(&gene).copied()
     }
 
     /// Feed one event. Returns whatever records that event completed — a frame on
@@ -252,21 +410,28 @@ impl Analyzer {
         self.last_tick = e.tick();
         let mut out = Vec::new();
         match e {
-            Event::Birth { tick, node, parent, genes, .. } => {
+            Event::Birth { tick, node, parent, policy, genes, .. } => {
                 self.births += 1;
                 let via = if parent.is_some() { Acquisition::Birth } else { Acquisition::Founder };
-                let mut state = NodeState::default();
+                let mut state = NodeState { policy: *policy, ..NodeState::default() };
                 for gene in genes {
                     state.genes.insert(*gene, via);
                     self.gain(*gene, *node, *tick, via);
                 }
                 self.nodes.insert(*node, state);
+                self.ancestry_index.insert(*node, self.trees.ancestry.len());
+                self.trees.ancestry.push((*node, *parent, *tick, None));
             }
-            Event::Acquire { tick, node, gene, via, .. } => {
+            Event::Acquire { tick, node, gene, via, from } => {
                 if let Some(state) = self.nodes.get_mut(node)
                     && state.genes.insert(*gene, *via).is_none()
                 {
                     self.gain(*gene, *node, *tick, *via);
+                    if via.is_lateral()
+                        && let Some(donor) = from
+                    {
+                        self.trees.transfers.push((*tick, *gene, *donor, *node, *via));
+                    }
                     if let Some(acc) = &mut self.epoch
                         && self.resistance.get(acc.hazard as usize) == Some(gene)
                         && via.is_lateral()
@@ -292,6 +457,17 @@ impl Analyzer {
                         self.drop_copy(gene, via, *tick);
                     }
                 }
+                if let Some(i) = self.ancestry_index.get(node) {
+                    self.trees.ancestry[*i].3 = Some(*tick);
+                }
+            }
+            Event::Network { partitioned, .. } => self.partitioned = *partitioned,
+            Event::Discovery { gene, kind, novel, .. } => {
+                self.solving.insert(*gene, *kind);
+                self.discoveries += 1;
+                if *novel {
+                    self.novel_discoveries += 1;
+                }
             }
             Event::Transfer { distance, refusal, .. } => {
                 let row = self
@@ -312,6 +488,7 @@ impl Analyzer {
                     Some(Refusal::Broke) => self.refusals.broke += 1,
                     Some(Refusal::Declined) => self.refusals.declined += 1,
                     Some(Refusal::Full) => self.refusals.full += 1,
+                    Some(Refusal::Immune) => self.refusals.immune += 1,
                 }
             }
             Event::Epoch { tick, hazard } => {
@@ -320,7 +497,7 @@ impl Analyzer {
                 }
                 self.open_epoch(*tick, *hazard);
             }
-            Event::Tick { tick, hazard, alive, survived, energy_mean, .. } => {
+            Event::Tick { tick, hazard, alive, survived, energy_total, .. } => {
                 if self.epoch.is_none() {
                     self.open_epoch(*tick, *hazard);
                 }
@@ -331,7 +508,7 @@ impl Analyzer {
                         *hazard,
                         *alive,
                         *survived,
-                        *energy_mean,
+                        *energy_total,
                     ))));
                 }
             }
@@ -422,7 +599,7 @@ impl Analyzer {
         hazard: u8,
         alive: u32,
         survived: u32,
-        energy_mean: f64,
+        energy_total: u64,
     ) -> FrameRecord {
         let population = self.nodes.len() as u32;
         let copies: usize = self.nodes.values().map(|n| n.genes.len()).sum();
@@ -436,6 +613,16 @@ impl Analyzer {
 
         let resistance: Vec<GeneRow> =
             self.resistance.clone().iter().map(|g| self.row(*g, population)).collect();
+        let solvers: Vec<u32> = (0..self.resistance.len() as u8)
+            .map(|kind| {
+                self.nodes
+                    .values()
+                    .filter(|n| {
+                        n.genes.keys().any(|g| self.solving.get(g) == Some(&kind))
+                    })
+                    .count() as u32
+            })
+            .collect();
 
         let mut top: Vec<GeneRow> = distinct.iter().map(|g| self.row(*g, population)).collect();
         top.sort_by(|a, b| b.carriers.cmp(&a.carriers).then(a.gene.cmp(&b.gene)));
@@ -468,7 +655,7 @@ impl Analyzer {
             epoch: tick / self.epoch_ticks,
             hazard,
             population,
-            energy_mean,
+            energy_mean: if alive == 0 { 0.0 } else { energy_total as f64 / alive as f64 },
             survival: if alive == 0 { 0.0 } else { survived as f64 / alive as f64 },
             births: self.births,
             deaths: self.deaths,
@@ -476,12 +663,83 @@ impl Analyzer {
             distinct_genes: distinct.len(),
             genome_mean: if population == 0 { 0.0 } else { copies as f64 / population as f64 },
             lateral_share: if copies == 0 { 0.0 } else { lateral_copies as f64 / copies as f64 },
+            partitioned: self.partitioned,
+            sides: self.sides(hazard),
+            divergence: self.divergence(),
             resistance,
+            solvers,
+            discoveries: self.discoveries,
+            novel_discoveries: self.novel_discoveries,
             top,
             acquisitions: self.acquisitions,
             refusals: self.refusals,
             barrier: self.barrier.values().copied().collect(),
+            policies: self.policies(),
         }
+    }
+
+    /// How far apart the two sides' gene pools are: the total-variation distance between
+    /// the gene *frequencies* on each side. Zero when both sides carry the same genes in
+    /// the same proportions, one when they share nothing.
+    ///
+    /// Frequencies rather than sets, because most gene ids in a population are one-off
+    /// mutants that exist in a single node: a set comparison is almost entirely a measure
+    /// of junk, and barely moves when the network is actually cut.
+    fn divergence(&self) -> f64 {
+        let mut here: BTreeMap<GeneId, f64> = BTreeMap::new();
+        let mut there: BTreeMap<GeneId, f64> = BTreeMap::new();
+        let (mut n_here, mut n_there) = (0.0, 0.0);
+        for (id, state) in &self.nodes {
+            let (counts, total) = if crate::transport::side(*id, self.partition_frac) {
+                (&mut here, &mut n_here)
+            } else {
+                (&mut there, &mut n_there)
+            };
+            for gene in state.genes.keys() {
+                *counts.entry(*gene).or_default() += 1.0;
+                *total += 1.0;
+            }
+        }
+        if n_here == 0.0 || n_there == 0.0 {
+            return 0.0;
+        }
+        let genes: BTreeSet<GeneId> = here.keys().chain(there.keys()).copied().collect();
+        let sum: f64 = genes
+            .iter()
+            .map(|g| {
+                let p = here.get(g).copied().unwrap_or(0.0) / n_here;
+                let q = there.get(g).copied().unwrap_or(0.0) / n_there;
+                (p - q).abs()
+            })
+            .sum();
+        sum / 2.0
+    }
+
+    fn sides(&self, hazard: u8) -> Sides {
+        let mut s = Sides::default();
+        for (id, state) in &self.nodes {
+            let solves = state.genes.keys().any(|g| self.solving.get(g) == Some(&hazard));
+            if crate::transport::side(*id, self.partition_frac) {
+                s.here += 1;
+                s.here_solvers += u32::from(solves);
+            } else {
+                s.there += 1;
+                s.there_solvers += u32::from(solves);
+            }
+        }
+        s
+    }
+
+    fn policies(&self) -> Policies {
+        let mut out = Policies::default();
+        for node in self.nodes.values() {
+            match node.policy {
+                Policy::AlwaysAccept => out.always_accept += 1,
+                Policy::Selfish => out.selfish += 1,
+                Policy::Thrifty => out.thrifty += 1,
+            }
+        }
+        out
     }
 
     fn open_epoch(&mut self, tick: u32, hazard: u8) {

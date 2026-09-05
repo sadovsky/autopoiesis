@@ -10,7 +10,7 @@
 
 use crate::config::HgtConfig;
 use crate::gene::{Acquisition, Carried, Gene, GeneId, Genome, NodeId, mutate};
-use crate::hazard::Challenge;
+use crate::hazard::{self, Challenge};
 use crate::vm;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
@@ -46,11 +46,14 @@ pub struct Fragment {
 }
 
 /// The outcome of one node meeting one stressor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Trial {
+    /// Did the node come out of the tick no worse off?
     pub survived: bool,
-    /// The gene that answered, if one did.
+    /// The gene that did best, if any of them emitted anything above chance.
     pub by: Option<GeneId>,
+    /// That gene's credit: 1.0 for an exact answer, 0.0 for chance or silence.
+    pub credit: f64,
     /// Genes executed — what the trial was charged on.
     pub tried: u32,
 }
@@ -59,6 +62,9 @@ pub struct Trial {
 pub struct Node {
     pub id: NodeId,
     pub strain: u8,
+    /// What this node does with genes it is offered, and whether it offers its own.
+    /// Heritable, so a population can be invaded by a different way of behaving.
+    pub policy: Policy,
     pub energy: u32,
     pub genome: Genome,
     /// Who this node can send to. Sparse, so a gene has to make its way across.
@@ -67,6 +73,9 @@ pub struct Node {
     pub born: u32,
     /// Free DNA this node is holding, from peers that died.
     pub fragments: Vec<Fragment>,
+    /// Genes this node has learned to refuse, oldest first — what survived a phage
+    /// teaches it. Inherited, so the memory outlives the node that paid for it.
+    pub immunity: Vec<GeneId>,
 }
 
 impl Node {
@@ -74,12 +83,14 @@ impl Node {
         Node {
             id,
             strain,
+            policy: Policy::default(),
             energy,
             genome: Genome::new(),
             peers: Vec::new(),
             parent,
             born,
             fragments: Vec::new(),
+            immunity: Vec::new(),
         }
     }
 
@@ -101,12 +112,17 @@ impl Node {
         self.spend(cfg.costs.upkeep.saturating_add(genome_cost));
     }
 
-    /// Meet the stressor: run genes in genome order until one answers, paying for each.
-    /// A node with no answer takes damage; a node that runs out of energy part-way
-    /// through simply stops trying, which is its own kind of death spiral.
-    pub fn face(&mut self, ch: &Challenge, cfg: &HgtConfig, tick: u32) -> Trial {
+    /// Meet the stressor: run genes, best-used-first, paying for each. A node stops early
+    /// on an exact answer and otherwise keeps looking while it can pay, so a large genome
+    /// is expensive precisely when nothing in it works.
+    ///
+    /// Credit is what the best gene scored (`hazard::score`), scaled by
+    /// `hazard_gradient`; an exact answer is always full credit. Energy gained and damage
+    /// taken are split by it, so getting close is worth something — which is the only
+    /// reason a lineage can climb towards a gene it does not yet have.
+    pub fn face(&mut self, probes: &[Challenge], cfg: &HgtConfig, tick: u32) -> Trial {
         let mut tried = 0;
-        let mut by = None;
+        let mut best: Option<(f64, GeneId)> = None;
         let codes: Vec<(GeneId, Vec<u8>)> =
             self.genome.by_recent_use().iter().map(|c| (c.gene.id, c.gene.code.clone())).collect();
         for (id, code) in codes {
@@ -115,23 +131,39 @@ impl Node {
             }
             self.spend(cfg.costs.trial);
             tried += 1;
-            if vm::run(&code, ch.payload, ch.kind, cfg.vm_budget).answer == Some(ch.answer) {
-                by = Some(id);
+            let credit = probes
+                .iter()
+                .map(|ch| match vm::run(&code, ch.payload, ch.kind, cfg.vm_budget).answer {
+                    Some(a) if a == ch.answer => 1.0,
+                    Some(a) => hazard::score(a, ch.answer) * cfg.hazard_gradient,
+                    None => 0.0,
+                })
+                .sum::<f64>()
+                / probes.len() as f64;
+            if best.is_none_or(|(b, _)| credit > b) {
+                best = Some((credit, id));
+            }
+            if credit >= 1.0 {
                 break;
             }
         }
-        match by {
-            Some(id) => {
-                if let Some(c) = self.genome.get_mut(id) {
-                    c.last_used = Some(tick);
-                    // It just answered a stressor: whatever it was, it works.
-                    c.proven = true;
-                }
-                self.gain(cfg.reward, cfg.energy_cap)
-            }
-            None => self.spend(cfg.damage),
+        let (credit, by) = match best {
+            Some((c, id)) if c > 0.0 => (c, Some(id)),
+            _ => (0.0, None),
+        };
+        let gain = (cfg.reward as f64 * credit).round() as u32;
+        let loss = (cfg.damage as f64 * (1.0 - credit)).round() as u32;
+        if let Some(id) = by
+            && credit >= cfg.proven_credit
+            && let Some(c) = self.genome.get_mut(id)
+        {
+            c.last_used = Some(tick);
+            // It answered well enough to be worth passing on.
+            c.proven = true;
         }
-        Trial { survived: by.is_some(), by, tried }
+        self.gain(gain, cfg.energy_cap);
+        self.spend(loss);
+        Trial { survived: gain >= loss, by, credit, tried }
     }
 
     pub fn ready_to_divide(&self, cfg: &HgtConfig) -> bool {
@@ -157,6 +189,15 @@ impl Node {
             strain = rng.random_range(0..cfg.strains);
         }
         let mut child = Node::new(child_id, strain, share, tick, Some(self.id));
+        child.policy = self.policy;
+        if cfg.policy_drift > 0.0 && rng.random::<f64>() < cfg.policy_drift {
+            child.policy = match rng.random_range(0..3u8) {
+                0 => Policy::AlwaysAccept,
+                1 => Policy::Selfish,
+                _ => Policy::Thrifty,
+            };
+        }
+        child.immunity = self.immunity.clone();
         child.peers = self.peers.clone();
         if !child.peers.contains(&self.id) {
             child.peers.push(self.id);
@@ -196,8 +237,8 @@ impl Node {
     }
 
     /// Will this node offer its genes to anyone this tick?
-    pub fn will_donate(&self, policy: Policy, cfg: &HgtConfig) -> bool {
-        match policy {
+    pub fn will_donate(&self, cfg: &HgtConfig) -> bool {
+        match self.policy {
             Policy::AlwaysAccept => true,
             Policy::Selfish => false,
             Policy::Thrifty => self.energy >= cfg.fission_threshold / 2,
@@ -205,11 +246,26 @@ impl Node {
     }
 
     /// Will it take one that arrives?
-    pub fn will_accept(&self, policy: Policy, cfg: &HgtConfig) -> bool {
-        match policy {
+    pub fn will_accept(&self, cfg: &HgtConfig) -> bool {
+        match self.policy {
             Policy::AlwaysAccept | Policy::Selfish => true,
             Policy::Thrifty => self.energy > cfg.damage + cfg.costs.integrate,
         }
+    }
+
+    /// Remember a gene as hostile. The memory is bounded and forgets the oldest first.
+    pub fn immunise(&mut self, gene: GeneId, capacity: usize) {
+        if capacity == 0 || self.immunity.contains(&gene) {
+            return;
+        }
+        if self.immunity.len() >= capacity {
+            self.immunity.remove(0);
+        }
+        self.immunity.push(gene);
+    }
+
+    pub fn immune_to(&self, gene: GeneId) -> bool {
+        self.immunity.contains(&gene)
     }
 
     /// Drop fragments that have decayed.
@@ -239,17 +295,18 @@ mod tests {
 
     #[test]
     fn carrying_the_right_gene_is_the_difference_between_gaining_and_losing_energy() {
-        let cfg = HgtConfig::default();
+        // Gradient off: the stressor is answered exactly or not at all.
+        let cfg = HgtConfig { hazard_gradient: 0.0, ..HgtConfig::default() };
         let env = Environment::new(&cfg, 5);
         let ch = env.challenge_at(0);
 
         let mut good = resistant_node(&cfg, &env, ch.kind);
-        let t = good.face(&ch, &cfg, 0);
+        let t = good.face(std::slice::from_ref(&ch), &cfg, 0);
         assert!(t.survived && t.by.is_some(), "the compiled gene must answer: {t:?}");
         assert_eq!(good.energy, cfg.energy_init - cfg.costs.trial + cfg.reward);
 
         let mut wrong = resistant_node(&cfg, &env, (ch.kind + 1) % cfg.hazard_kinds);
-        let t = wrong.face(&ch, &cfg, 0);
+        let t = wrong.face(std::slice::from_ref(&ch), &cfg, 0);
         assert!(!t.survived, "a gene for another stressor must not help");
         assert_eq!(wrong.energy, cfg.energy_init - cfg.costs.trial - cfg.damage);
     }

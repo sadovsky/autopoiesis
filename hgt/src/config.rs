@@ -39,6 +39,21 @@ impl Default for Costs {
     }
 }
 
+/// What the founding population starts holding.
+#[derive(Serialize, Deserialize, clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+#[clap(rename_all = "snake_case")]
+pub enum FounderGenes {
+    /// Compiled resistance genes: everyone can answer the first stressor, and
+    /// `founder_carriers` nodes hold the answer to each later one. This is the world the
+    /// transfer experiments are run in — the genes exist, the question is how they move.
+    #[default]
+    Seeded,
+    /// Random bytes. Nothing in the population answers anything, so the only way to a
+    /// working gene is to find one. This is the world the discovery experiment is run in.
+    Random,
+}
+
 /// Which transfer mechanisms are switched on. The A/B experiment is this struct.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(default)]
@@ -124,6 +139,12 @@ pub struct HgtConfig {
     pub costs: Costs,
     /// Energy gained by answering the tick's stressor. Default 14.
     pub reward: u32,
+    /// Energy every live node receives each tick regardless of what it can answer — the
+    /// sunlight of this world. At 0 a node that answers nothing is dead within a few
+    /// ticks, which is the regime the transfer experiments run in. A discovery experiment
+    /// needs a population that can stay alive while it searches, so it turns this up.
+    /// Default 0.
+    pub income: u32,
     /// Energy lost by failing to answer it. Default 22.
     pub damage: u32,
 
@@ -133,6 +154,24 @@ pub struct HgtConfig {
     pub epoch_ticks: u32,
     /// Instruction budget for one gene against one stressor. Default 96.
     pub vm_budget: u32,
+    /// How much credit a near miss earns, 0..1. At 0 a stressor is answered exactly or
+    /// not at all, and a working gene can only ever be inherited or received — the
+    /// 32-bit key is far too large to stumble on. Above 0 the population is paid in
+    /// proportion to how close it got, which turns the key into a gradient a lineage can
+    /// climb, so genes can be *discovered* as well as moved. Default 0.6.
+    pub hazard_gradient: f64,
+    /// How many payloads a stressor is posed with each tick. Credit is the mean over
+    /// them, so a gene that guessed well once does not out-compete one that computes the
+    /// answer. More probes cost proportionally more energy in trials. Default 1.
+    pub probes: u32,
+    /// Offer peers every mobile gene, including ones nobody has seen work. Every mutated
+    /// copy in flight is a new gene, so this floods the network with junk that recipients
+    /// pay upkeep on — which is exactly why the default is false, and why it is a knob
+    /// rather than a rule: the effect is measurable. Default false.
+    pub offer_unproven: bool,
+    /// Credit at which a gene counts as known to work, and so becomes offerable to peers.
+    /// Below 1 a gene that is close but not right can still spread. Default 0.9.
+    pub proven_credit: f64,
 
     /// Per-byte substitution probability when a genome is copied at fission. Default 0.004.
     pub mutation_rate: f64,
@@ -166,17 +205,36 @@ pub struct HgtConfig {
     pub lysis_prob: f64,
     /// Energy lost when that happens. Default 30.
     pub lysis_damage: u32,
+    /// Probability that surviving a phage attack teaches a node to refuse the gene that
+    /// phage was carrying — an acquired, heritable immune memory, as a CRISPR array is.
+    /// It is not free: the memory cannot tell a parasite from a gene the node will need,
+    /// so immunity blocks useful genes too. Default 0.0 (no immune system).
+    pub crispr_rate: f64,
+    /// How many gene ids a node's immune memory holds before the oldest is forgotten.
+    /// Default 8.
+    pub immunity_capacity: usize,
     /// Ticks a dead node's released fragments remain takeable. Default 30.
     pub fragment_ttl: u32,
     /// A node gossips its peer list once every this many ticks, so peer lists survive the
     /// deaths of the nodes in them. Default 16.
     pub gossip_every: u32,
 
+    /// Tick at which the network splits in two. Nothing crosses until it heals. Default
+    /// none.
+    pub partition_at: Option<u32>,
+    /// Tick at which it heals. Default none.
+    pub partition_heal_at: Option<u32>,
+    /// Share of the id space on the far side of the split. Also the split the divergence
+    /// metric is reported against, so it is meaningful even when no partition is in
+    /// force. Default 0.5.
+    pub partition_frac: f64,
     /// Delivery delay in ticks for the simulated transport. Default 1.
     pub latency: u32,
     /// Probability the simulated transport drops a message. Default 0.0.
     pub loss: f64,
 
+    /// What founders start with.
+    pub founder_genes: FounderGenes,
     /// Founders seeded with the resistance gene for each *future* stressor. Two, not one,
     /// so that a run does not turn on whether a single node happens to die early.
     /// Default 2.
@@ -197,8 +255,14 @@ pub struct HgtConfig {
     pub report_min_carriers: u32,
 
     pub mechanisms: Mechanisms,
-    /// How nodes decide what to give and what to take. Default `always_accept`.
+    /// The policy founders start with. It is heritable, not a global rule.
+    /// Default `always_accept`.
     pub policy: Policy,
+    /// Founders that start `selfish` instead — a free rider dropped into a population of
+    /// donors, to see whether it takes over. Default 0.
+    pub selfish_founders: usize,
+    /// Probability a child's policy differs from its parent's. Default 0.0.
+    pub policy_drift: f64,
 }
 
 impl Default for HgtConfig {
@@ -213,11 +277,16 @@ impl Default for HgtConfig {
             fission_threshold: 240,
             costs: Costs::default(),
             reward: 14,
+            income: 0,
             damage: 22,
 
             hazard_kinds: 4,
             epoch_ticks: 300,
             vm_budget: 96,
+            hazard_gradient: 0.6,
+            offer_unproven: false,
+            probes: 1,
+            proven_credit: 0.9,
 
             mutation_rate: 0.004,
             plasmid_loss: 0.005,
@@ -234,12 +303,18 @@ impl Default for HgtConfig {
             phage_hops: 6,
             lysis_prob: 0.10,
             lysis_damage: 30,
+            crispr_rate: 0.0,
+            immunity_capacity: 8,
             fragment_ttl: 30,
             gossip_every: 16,
 
+            partition_at: None,
+            partition_heal_at: None,
+            partition_frac: 0.5,
             latency: 1,
             loss: 0.0,
 
+            founder_genes: FounderGenes::Seeded,
             founder_carriers: 2,
 
             analysis_every: 10,
@@ -250,6 +325,8 @@ impl Default for HgtConfig {
 
             mechanisms: Mechanisms::default(),
             policy: Policy::AlwaysAccept,
+            selfish_founders: 0,
+            policy_drift: 0.0,
         }
     }
 }
@@ -283,6 +360,9 @@ impl HgtConfig {
         if self.vm_budget == 0 {
             bail!("vm_budget must be > 0");
         }
+        if self.probes == 0 {
+            bail!("probes must be > 0");
+        }
         if self.energy_cap == 0 || self.energy_init == 0 {
             bail!("energy_init and energy_cap must be > 0");
         }
@@ -307,14 +387,19 @@ impl HgtConfig {
         for (name, v) in [
             ("mutation_rate", self.mutation_rate),
             ("plasmid_loss", self.plasmid_loss),
+            ("hazard_gradient", self.hazard_gradient),
+            ("proven_credit", self.proven_credit),
             ("fixation_freq", self.fixation_freq),
+            ("policy_drift", self.policy_drift),
             ("strain_drift", self.strain_drift),
             ("restriction", self.restriction),
             ("conjugation_rate", self.conjugation_rate),
             ("transformation_rate", self.transformation_rate),
             ("transduction_rate", self.transduction_rate),
             ("lysis_prob", self.lysis_prob),
+            ("crispr_rate", self.crispr_rate),
             ("loss", self.loss),
+            ("partition_frac", self.partition_frac),
         ] {
             if !(0.0..=1.0).contains(&v) {
                 bail!("{name} must be in [0, 1], got {v}");

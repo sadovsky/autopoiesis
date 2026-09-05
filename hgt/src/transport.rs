@@ -26,9 +26,21 @@ pub trait Transport {
     fn counts(&self) -> (u64, u64);
     /// A node has gone; the transport may forget about it.
     fn forget(&mut self, _node: NodeId) {}
+    /// Split the network in two, or heal it. `Some(frac)` puts that share of the id space
+    /// on the far side of a cut that no message crosses; `None` restores it. A real
+    /// network partitions itself and cannot be asked to, so `TcpTransport` ignores this.
+    fn partition(&mut self, _frac: Option<f64>) {}
     /// The world announces the tick at the start of each network phase, so `send` needs
     /// no tick argument. A real socket does not care what tick it is.
     fn set_tick(&mut self, _tick: u32) {}
+}
+
+/// Which side of a partition a node is on. A pure function of the id, so nodes born
+/// during a partition land on a side without anyone deciding, and both the transport and
+/// the analyzer agree on where everybody is.
+pub fn side(id: NodeId, frac: f64) -> bool {
+    let h = crate::hazard::splitmix64(id as u64 ^ 0x5107_5107_5107_5107);
+    ((h >> 11) as f64 / (1u64 << 53) as f64) < frac
 }
 
 /// In-process delivery with a fixed delay, a drop rate, and cuttable links.
@@ -37,6 +49,8 @@ pub struct SimTransport {
     loss: f64,
     /// Ordered links that are down. Cuts are symmetric.
     cuts: Vec<(NodeId, NodeId)>,
+    /// A whole-network split, if one is in force.
+    split: Option<f64>,
     queue: BTreeMap<u32, Vec<Envelope>>,
     now: u32,
     rng: Xoshiro256PlusPlus,
@@ -50,6 +64,7 @@ impl SimTransport {
             latency: latency.max(1),
             loss,
             cuts: Vec::new(),
+            split: None,
             queue: BTreeMap::new(),
             now: 0,
             // Decoupled from the world's stream so that loss does not reshuffle the run.
@@ -78,22 +93,21 @@ impl SimTransport {
         }
     }
 
-    /// Cut every link between `group` and everything else: a network partition.
-    pub fn partition(&mut self, group: &[NodeId], all: &[NodeId]) {
-        for &a in group {
-            for &b in all {
-                if !group.contains(&b) {
-                    self.cut(a, b);
-                }
-            }
-        }
-    }
-
     pub fn heal(&mut self) {
         self.cuts.clear();
+        self.split = None;
+    }
+
+    pub fn is_split(&self) -> bool {
+        self.split.is_some()
     }
 
     fn is_cut(&self, a: NodeId, b: NodeId) -> bool {
+        if let Some(frac) = self.split
+            && side(a, frac) != side(b, frac)
+        {
+            return true;
+        }
         let pair = (a.min(b), a.max(b));
         self.cuts.contains(&pair)
     }
@@ -144,6 +158,10 @@ impl Transport for SimTransport {
     fn set_tick(&mut self, tick: u32) {
         self.now = tick;
     }
+
+    fn partition(&mut self, frac: Option<f64>) {
+        self.split = frac;
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +185,25 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert_eq!((got[0].from, got[1].from), (1, 3), "delivery order follows send order");
         assert_eq!(t.in_flight(), 0);
+    }
+
+    #[test]
+    fn a_partition_splits_the_network_by_id_and_heals() {
+        let mut t = SimTransport::new(1, 0.0, 1);
+        Transport::set_tick(&mut t, 0);
+        let ids: Vec<NodeId> = (0..40).collect();
+        let (a, b): (Vec<NodeId>, Vec<NodeId>) = ids.iter().partition(|i| side(**i, 0.5));
+        assert!(!a.is_empty() && !b.is_empty(), "a half-and-half split should split");
+
+        Transport::partition(&mut t, Some(0.5));
+        t.send(hello(a[0], b[0]));
+        t.send(hello(b[0], a[0]));
+        t.send(hello(a[0], a[1]));
+        assert_eq!(t.deliver(5).len(), 1, "only the message that stayed on one side arrives");
+
+        t.heal();
+        t.send(hello(a[0], b[0]));
+        assert_eq!(t.deliver(5).len(), 1, "healing lets messages cross again");
     }
 
     #[test]

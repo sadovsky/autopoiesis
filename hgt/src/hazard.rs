@@ -57,7 +57,19 @@ impl Environment {
     }
 
     pub fn payload_at(&self, tick: u32) -> u32 {
-        splitmix64(self.seed ^ (tick as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)) as u32
+        self.probe_at(tick, 0)
+    }
+
+    /// The `i`th payload a stressor is posed with on this tick. Posing it more than once
+    /// is what separates a gene that computes the answer from one that guessed: a gene
+    /// with the wrong rotation scores differently on every payload, so with one probe its
+    /// fitness is noise and selection cannot hold on to a real improvement.
+    pub fn probe_at(&self, tick: u32, i: u32) -> u32 {
+        splitmix64(
+            self.seed
+                ^ (tick as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ (i as u64).wrapping_mul(0xD1B5_4A32_D192_ED03),
+        ) as u32
     }
 
     pub fn answer(&self, kind: u8, payload: u32) -> u32 {
@@ -69,6 +81,22 @@ impl Environment {
         let kind = self.kind_at(tick);
         let payload = self.payload_at(tick);
         Challenge { kind, payload, answer: self.answer(kind, payload) }
+    }
+
+    /// Does this code actually compute the answer for `kind`? Checked against several
+    /// payloads, so a gene that got one right by luck does not count. This is how a
+    /// *discovered* gene is recognised: what matters is the function it computes, not
+    /// whether its bytes match the one the run was seeded with.
+    pub fn solves(&self, code: &[u8], kind: u8, budget: u32) -> bool {
+        (0..4).all(|i| {
+            let payload = splitmix64(self.seed ^ 0xc0de_0000 ^ i) as u32;
+            crate::vm::run(code, payload, kind, budget).answer == Some(self.answer(kind, payload))
+        })
+    }
+
+    /// Which stressor, if any, this code answers.
+    pub fn solved_kind(&self, code: &[u8], budget: u32) -> Option<u8> {
+        (0..self.kinds).find(|k| self.solves(code, *k, budget))
     }
 
     /// A gene that answers stressor `kind`, as bytes. This is the only place in the
@@ -94,6 +122,20 @@ pub fn compile_resistance(key: u32, rot: u8) -> Vec<u8> {
     prog.push(I::Rotl(rot & 0x0F));
     prog.push(I::Emit);
     prog.iter().map(|i| i.encode()).collect()
+}
+
+/// How close an emitted answer is to the correct one, measured above chance. A random
+/// 32-bit word already gets half its bits right, so that is the zero: `0.0` at chance,
+/// `1.0` for exact, and nothing in between for a guess that is worse than chance.
+///
+/// This is the whole difference between a sandbox where working genes can only be
+/// inherited and one where they can be *found*: the key a resistance gene carries is
+/// built a nibble at a time, and XOR-then-rotate preserves bit differences, so a gene one
+/// nibble away from working scores visibly better than one that is nowhere near. That is
+/// a gradient, and a population can climb it.
+pub fn score(emitted: u32, answer: u32) -> f64 {
+    let right = 32 - (emitted ^ answer).count_ones();
+    ((right as f64 - 16.0) / 16.0).max(0.0)
 }
 
 /// SplitMix64 — a fixed mixing function, not an RNG stream, so the schedule can be
@@ -145,6 +187,42 @@ mod tests {
         let other = Environment::new(&cfg, 2);
         assert_ne!(env.secret(0), other.secret(0), "the answer must depend on the run seed");
         assert_ne!(env.payload_at(5), other.payload_at(5));
+    }
+
+    #[test]
+    fn a_gene_one_nibble_off_scores_better_than_one_that_is_nowhere_near() {
+        let cfg = HgtConfig::default();
+        let env = Environment::new(&cfg, 9);
+        let payload = env.payload_at(3);
+        let answer = env.answer(0, payload);
+        assert_eq!(score(answer, answer), 1.0);
+
+        // One wrong nibble in the key: a handful of bits out, and clearly above chance.
+        let (key, rot) = env.secret(0);
+        let near = compile_resistance(key ^ 0x0000_0800, rot);
+        let near_score = score(vm::run(&near, payload, 0, cfg.vm_budget).answer.unwrap(), answer);
+        assert!(near_score > 0.7, "a near miss scored {near_score}");
+        assert!(near_score < 1.0);
+
+        // The right key with the wrong rotation is no better than noise.
+        let spun = compile_resistance(key, (rot % 15) + 1);
+        let spun_score = score(vm::run(&spun, payload, 0, cfg.vm_budget).answer.unwrap(), answer);
+        assert!(spun_score < 0.5, "a rotated answer scored {spun_score}");
+    }
+
+    #[test]
+    fn solving_is_about_the_function_not_the_bytes() {
+        let cfg = HgtConfig::default();
+        let env = Environment::new(&cfg, 9);
+        let compiled = env.resistance_gene(1);
+        assert!(env.solves(&compiled, 1, cfg.vm_budget));
+        assert_eq!(env.solved_kind(&compiled, cfg.vm_budget), Some(1));
+
+        // The same function, written differently: Nops and a redundant swap pair.
+        let mut padded = vec![I::Nop.encode(), I::Swap.encode(), I::Swap.encode()];
+        padded.extend_from_slice(&compiled);
+        assert!(env.solves(&padded, 1, cfg.vm_budget), "a different program, the same answer");
+        assert_eq!(env.solved_kind(&[I::Emit.encode()], cfg.vm_budget), None);
     }
 
     #[test]

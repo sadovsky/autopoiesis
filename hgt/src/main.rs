@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use hgt::config::{HgtConfig, Mechanisms};
+use hgt::config::{FounderGenes, HgtConfig, Mechanisms};
 use hgt::event::Event;
 use hgt::metrics::{Analyzer, Record};
 use hgt::node::Policy;
@@ -76,6 +76,39 @@ struct RunArgs {
     /// Genes a node can hold.
     #[arg(long)]
     max_genes: Option<usize>,
+    /// Credit a near miss earns, 0..1. At 0 a stressor is answered exactly or not at all.
+    #[arg(long)]
+    hazard_gradient: Option<f64>,
+    /// Payloads a stressor is posed with each tick.
+    #[arg(long)]
+    probes: Option<u32>,
+    /// Energy every node receives each tick regardless of what it can answer.
+    #[arg(long)]
+    income: Option<u32>,
+    /// What founders start holding.
+    #[arg(long, value_enum)]
+    founder_genes: Option<FounderGenes>,
+    /// Founders that start as free riders.
+    #[arg(long)]
+    selfish_founders: Option<usize>,
+    /// Probability a child's policy differs from its parent's.
+    #[arg(long)]
+    policy_drift: Option<f64>,
+    /// Probability surviving a phage teaches a node to refuse its gene.
+    #[arg(long)]
+    crispr_rate: Option<f64>,
+    /// Offer peers genes nobody has seen work, junk included.
+    #[arg(long)]
+    offer_unproven: bool,
+    /// Tick at which the network splits in two.
+    #[arg(long)]
+    partition_at: Option<u32>,
+    /// Tick at which it heals.
+    #[arg(long)]
+    partition_heal_at: Option<u32>,
+    /// Share of the id space on the far side of the split.
+    #[arg(long)]
+    partition_frac: Option<f64>,
 
     /// Watch the population in the terminal.
     #[arg(long)]
@@ -93,6 +126,11 @@ struct RunArgs {
     /// Write metric records here, one JSON object per line ("-" for stdout).
     #[arg(long)]
     metrics: Option<PathBuf>,
+    /// Write the family tree and the transfer graph into this directory: ancestry.tsv,
+    /// ancestry.newick and transfers.tsv. Every row in transfers.tsv is a place where a
+    /// gene's history departs from the tree.
+    #[arg(long)]
+    trees: Option<PathBuf>,
     /// Write the raw event stream here — the input `analyze` re-derives metrics from.
     #[arg(long)]
     events: Option<PathBuf>,
@@ -201,6 +239,39 @@ fn build_config(a: &RunArgs) -> Result<HgtConfig> {
     }
     if let Some(g) = a.max_genes {
         cfg.max_genes = g;
+    }
+    if let Some(g) = a.hazard_gradient {
+        cfg.hazard_gradient = g;
+    }
+    if let Some(p) = a.probes {
+        cfg.probes = p;
+    }
+    if let Some(i) = a.income {
+        cfg.income = i;
+    }
+    if let Some(f) = a.founder_genes {
+        cfg.founder_genes = f;
+    }
+    if let Some(n) = a.selfish_founders {
+        cfg.selfish_founders = n;
+    }
+    if let Some(d) = a.policy_drift {
+        cfg.policy_drift = d;
+    }
+    if let Some(c) = a.crispr_rate {
+        cfg.crispr_rate = c;
+    }
+    if a.offer_unproven {
+        cfg.offer_unproven = true;
+    }
+    if let Some(t) = a.partition_at {
+        cfg.partition_at = Some(t);
+    }
+    if let Some(t) = a.partition_heal_at {
+        cfg.partition_heal_at = Some(t);
+    }
+    if let Some(f) = a.partition_frac {
+        cfg.partition_frac = f;
     }
     if let Some(n) = a.analysis_every {
         cfg.analysis_every = n;
@@ -382,10 +453,34 @@ fn run(cfg: HgtConfig, a: &RunArgs) -> Result<RunSummary> {
     if let Some(w) = &mut events {
         w.flush()?;
     }
+    if let Some(dir) = &a.trees {
+        write_trees(analyzer.trees(), dir)?;
+    }
     Ok(summary)
 }
 
-fn analyze(cfg: &HgtConfig, seed: u64, file: &Path, out: Option<&Path>) -> Result<()> {
+/// The family tree and the transfer graph, as files other tools can read.
+fn write_trees(trees: &hgt::metrics::Trees, dir: &Path) -> Result<()> {
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    fs::write(dir.join("ancestry.tsv"), trees.ancestry_tsv())?;
+    fs::write(dir.join("transfers.tsv"), trees.transfers_tsv())?;
+    fs::write(dir.join("ancestry.newick"), trees.newick())?;
+    eprintln!(
+        "{} nodes, {} lateral transfers -> {}",
+        trees.ancestry.len(),
+        trees.transfers.len(),
+        dir.display()
+    );
+    Ok(())
+}
+
+fn analyze(
+    cfg: &HgtConfig,
+    seed: u64,
+    file: &Path,
+    out: Option<&Path>,
+    trees: Option<&Path>,
+) -> Result<()> {
     let f = File::open(file).with_context(|| format!("opening {}", file.display()))?;
     let mut analyzer = Analyzer::new(cfg, seed);
     let mut sink = match out {
@@ -411,7 +506,11 @@ fn analyze(cfg: &HgtConfig, seed: u64, file: &Path, out: Option<&Path>) -> Resul
     for rec in analyzer.finish() {
         sink.write(&rec)?;
     }
-    sink.flush()
+    sink.flush()?;
+    if let Some(dir) = trees {
+        write_trees(analyzer.trees(), dir)?;
+    }
+    Ok(())
 }
 
 fn parse_seeds(s: &str) -> Result<Vec<u64>> {
@@ -441,6 +540,7 @@ fn sweep(cfg: HgtConfig, a: &RunArgs, seeds: &[u64], out: &Path, jobs: Option<us
         args.seed = seed;
         args.metrics = Some(out.join(format!("seed_{seed}.jsonl")));
         args.events = None;
+        args.trees = None;
         args.progress = 0;
         args.render = false;
         match run(cfg.clone(), &args) {
@@ -642,7 +742,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
     match &cli.cmd {
-        Some(Cmd::Analyze { file, out }) => analyze(&cfg, cli.run.seed, file, out.as_deref()),
+        Some(Cmd::Analyze { file, out }) => {
+            analyze(&cfg, cli.run.seed, file, out.as_deref(), cli.run.trees.as_deref())
+        }
         Some(Cmd::Node { index, listen, peers, tick_ms }) => {
             node(cfg, &cli.run, *index, *listen, peers, *tick_ms)
         }

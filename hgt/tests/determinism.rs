@@ -76,7 +76,10 @@ fn measuring_live_and_re_deriving_from_the_log_agree_exactly() {
     for rec in analyzer.finish() {
         replayed.push(serde_json::to_string(&rec).expect("records serialize"));
     }
-    assert_eq!(live, replayed, "online and offline metrics diverged");
+    assert_eq!(live.len(), replayed.len(), "online produced {} records, replay {}", live.len(), replayed.len());
+    for (i, (a, b)) in live.iter().zip(&replayed).enumerate() {
+        assert_eq!(a, b, "record {i} differs between the live run and the replay");
+    }
     assert!(!live.is_empty());
 }
 
@@ -108,7 +111,7 @@ fn the_metric_records_a_run_emits_are_the_three_kinds_and_nothing_else() {
     // A `Record` is one of three shapes and serializes untagged, so nothing is nested.
     let _: Record = {
         let mut a = Analyzer::new(&cfg(), 5);
-        a.observe(&Event::Tick { tick: 0, hazard: 0, alive: 0, survived: 0, failed: 0, energy_mean: 0.0 })
+        a.observe(&Event::Tick { tick: 0, hazard: 0, alive: 0, survived: 0, failed: 0, energy_total: 0 })
             .pop()
             .expect("a tick on an analysis boundary emits a frame")
     };

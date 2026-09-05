@@ -9,7 +9,7 @@
 //! The tick is: upkeep → face the stressor → network → death → fission. Death before
 //! fission matters — a node that cannot pay for its genome does not get to divide first.
 
-use crate::config::HgtConfig;
+use crate::config::{FounderGenes, HgtConfig};
 use crate::event::{Cause, Event, Refusal};
 use crate::gene::{Acquisition, Carried, Gene, GeneId, Insert, NodeId};
 use crate::hazard::Environment;
@@ -34,6 +34,8 @@ pub struct Stats {
     pub peak_population: usize,
     pub survived: u64,
     pub failed: u64,
+    /// Mutated genes that turned out to answer a stressor.
+    pub discoveries: u64,
 }
 
 pub struct World {
@@ -90,16 +92,34 @@ impl World {
         for id in id_base..id_base + cfg.nodes as NodeId {
             let strain = rng.random_range(0..cfg.strains);
             let mut node = Node::new(id, strain, cfg.energy_init, 0, None);
-            node.genome.insert(founder_gene(&env, 0));
+            node.policy = cfg.policy;
+            match cfg.founder_genes {
+                FounderGenes::Seeded => {
+                    node.genome.insert(founder_gene(&env, 0));
+                }
+                FounderGenes::Random => {
+                    let len = env.resistance_gene(0).len();
+                    let code: Vec<u8> = (0..len).map(|_| rng.random::<u8>()).collect();
+                    let gene = Gene::new(code, id, 0, true);
+                    // Unproven: nobody has seen it do anything, because it does nothing.
+                    node.genome.insert(Carried::new(gene, Acquisition::Founder, None, 0, false));
+                }
+            }
             nodes.insert(id, node);
         }
 
         let ids: Vec<NodeId> = nodes.keys().copied().collect();
-        for kind in 1..env.kinds() {
-            for _ in 0..cfg.founder_carriers.min(ids.len()) {
-                let pick = ids[rng.random_range(0..ids.len())];
-                let node = nodes.get_mut(&pick).expect("founder exists");
-                node.genome.insert(founder_gene(&env, kind));
+        for _ in 0..cfg.selfish_founders.min(ids.len()) {
+            let pick = ids[rng.random_range(0..ids.len())];
+            nodes.get_mut(&pick).expect("founder exists").policy = crate::node::Policy::Selfish;
+        }
+        if cfg.founder_genes == FounderGenes::Seeded {
+            for kind in 1..env.kinds() {
+                for _ in 0..cfg.founder_carriers.min(ids.len()) {
+                    let pick = ids[rng.random_range(0..ids.len())];
+                    let node = nodes.get_mut(&pick).expect("founder exists");
+                    node.genome.insert(founder_gene(&env, kind));
+                }
             }
         }
 
@@ -173,6 +193,7 @@ impl World {
                 node: node.id,
                 parent: None,
                 strain: node.strain,
+                policy: node.policy,
                 genes: node.genome.ids().collect(),
             });
         }
@@ -186,19 +207,38 @@ impl World {
         if tick > 0 && tick.is_multiple_of(self.cfg.epoch_ticks) {
             events.push(Event::Epoch { tick, hazard: self.env.kind_at(tick) });
         }
+        if self.cfg.partition_at == Some(tick) {
+            self.transport.partition(Some(self.cfg.partition_frac));
+            events.push(Event::Network { tick, partitioned: true });
+        }
+        if self.cfg.partition_heal_at == Some(tick) {
+            self.transport.partition(None);
+            events.push(Event::Network { tick, partitioned: false });
+        }
         let ch = self.env.challenge_at(tick);
+        let probes: Vec<crate::hazard::Challenge> = (0..self.cfg.probes)
+            .map(|i| {
+                let payload = self.env.probe_at(tick, i);
+                crate::hazard::Challenge {
+                    kind: ch.kind,
+                    payload,
+                    answer: self.env.answer(ch.kind, payload),
+                }
+            })
+            .collect();
         self.lysed.clear();
 
         let ids: Vec<NodeId> = self.nodes.keys().copied().collect();
         let (mut survived, mut failed) = (0u32, 0u32);
         for id in &ids {
             let node = self.nodes.get_mut(id).expect("live node");
+            node.gain(self.cfg.income, self.cfg.energy_cap);
             node.pay_upkeep(&self.cfg);
             if !node.alive() {
                 failed += 1;
                 continue;
             }
-            if node.face(&ch, &self.cfg, tick).survived {
+            if node.face(&probes, &self.cfg, tick).survived {
                 survived += 1;
             } else {
                 failed += 1;
@@ -214,12 +254,24 @@ impl World {
         }
 
         for id in &ids {
-            if self.nodes.len() >= self.cfg.max_nodes {
-                break;
-            }
             let ready = self.nodes.get(id).is_some_and(|n| n.ready_to_divide(&self.cfg));
             if !ready {
                 continue;
+            }
+            // At the ceiling a birth costs somebody their place, chosen at random —
+            // a Moran step. Without turnover the population simply freezes at the cap and
+            // nothing can be selected for, however good a gene is; and evicting the
+            // *weakest* would be worse than random, because the weakest node is usually
+            // one that just divided and handed half its energy away, which would select
+            // against reproducing at all.
+            if self.nodes.len() >= self.cfg.max_nodes {
+                let others: Vec<NodeId> =
+                    self.nodes.keys().copied().filter(|n| n != id).collect();
+                if others.is_empty() {
+                    continue;
+                }
+                let victim = others[self.rng.random_range(0..others.len())];
+                self.reap_with(victim, tick, Cause::Crowded, &mut events);
             }
             let child_id = self.next_id;
             self.next_id += 1;
@@ -227,11 +279,31 @@ impl World {
                 let parent = self.nodes.get_mut(id).expect("live node");
                 parent.divide(child_id, tick, &self.cfg, &mut self.rng)
             };
+            // A mutated copy is a new program. Most are junk; occasionally one computes
+            // the answer to a stressor nobody in the population could answer, which is
+            // the only way a working gene enters this world after founding.
+            for carried in child.genome.iter() {
+                if carried.gene.origin != child.id {
+                    continue;
+                }
+                if let Some(kind) = self.env.solved_kind(&carried.gene.code, self.cfg.vm_budget) {
+                    let novel = carried.gene.id != crate::gene::fnv1a(&self.env.resistance_gene(kind));
+                    events.push(Event::Discovery {
+                        tick,
+                        node: child.id,
+                        gene: carried.gene.id,
+                        kind,
+                        novel,
+                    });
+                    self.stats.discoveries += 1;
+                }
+            }
             events.push(Event::Birth {
                 tick,
                 node: child.id,
                 parent: child.parent,
                 strain: child.strain,
+                policy: child.policy,
                 genes: child.genome.ids().collect(),
             });
             self.stats.births += 1;
@@ -239,12 +311,8 @@ impl World {
         }
 
         let alive = self.nodes.len() as u32;
-        let energy_mean = if alive == 0 {
-            0.0
-        } else {
-            self.nodes.values().map(|n| n.energy as f64).sum::<f64>() / alive as f64
-        };
-        events.push(Event::Tick { tick, hazard: ch.kind, alive, survived, failed, energy_mean });
+        let energy_total: u64 = self.nodes.values().map(|n| n.energy as u64).sum();
+        events.push(Event::Tick { tick, hazard: ch.kind, alive, survived, failed, energy_total });
 
         self.stats.survived += survived as u64;
         self.stats.failed += failed as u64;
@@ -266,7 +334,7 @@ impl World {
             }
             self.gossip(id, tick);
 
-            let donates = self.nodes[&id].will_donate(self.cfg.policy, &self.cfg);
+            let donates = self.nodes[&id].will_donate(&self.cfg);
             if self.cfg.mechanisms.conjugation
                 && donates
                 && self.rng.random::<f64>() < self.cfg.conjugation_rate
@@ -309,7 +377,8 @@ impl World {
         if node.energy <= self.cfg.costs.conjugate {
             return;
         }
-        let genes: Vec<GeneId> = node.genome.mobile().map(|c| c.gene.id).collect();
+        let genes: Vec<GeneId> =
+            node.genome.mobile(self.cfg.offer_unproven).map(|c| c.gene.id).collect();
         if genes.is_empty() {
             return;
         }
@@ -348,7 +417,13 @@ impl World {
     }
 
     fn random_mobile_gene(&mut self, id: NodeId) -> Option<Gene> {
-        let genes: Vec<Gene> = self.nodes.get(&id)?.genome.mobile().map(|c| c.gene.clone()).collect();
+        let genes: Vec<Gene> = self
+            .nodes
+            .get(&id)?
+            .genome
+            .mobile(self.cfg.offer_unproven)
+            .map(|c| c.gene.clone())
+            .collect();
         if genes.is_empty() {
             return None;
         }
@@ -401,7 +476,7 @@ impl World {
                     return;
                 }
                 let node = self.nodes.get(&to).expect("checked above");
-                if !node.will_accept(self.cfg.policy, &self.cfg) {
+                if !node.will_accept(&self.cfg) {
                     return;
                 }
                 let Some(want) = genes.into_iter().find(|g| !node.genome.contains(*g)) else {
@@ -442,9 +517,33 @@ impl World {
                 if !self.cfg.mechanisms.transduction {
                     return;
                 }
+                // An immune node cuts the incoming DNA before it can do anything —
+                // that is what the memory is *for*, and why it is worth the cost of
+                // sometimes refusing a gene it needed. The phage dies here.
+                if self.nodes[&to].immune_to(gene.id) {
+                    self.stats.attempts += 1;
+                    let distance = Node::strain_distance(strain, self.nodes[&to].strain);
+                    events.push(Event::Transfer {
+                        tick,
+                        from: origin,
+                        to,
+                        gene: gene.id,
+                        via: Acquisition::Transduction,
+                        distance,
+                        refusal: Some(Refusal::Immune),
+                    });
+                    return;
+                }
                 if self.rng.random::<f64>() < self.cfg.lysis_prob {
                     let damage = self.cfg.lysis_damage;
-                    self.nodes.get_mut(&to).expect("checked above").spend(damage);
+                    let learn = self.rng.random::<f64>() < self.cfg.crispr_rate;
+                    let capacity = self.cfg.immunity_capacity;
+                    let node = self.nodes.get_mut(&to).expect("checked above");
+                    node.spend(damage);
+                    // Surviving an attack is what teaches: a node that dies learns nothing.
+                    if learn && node.alive() {
+                        node.immunise(gene.id, capacity);
+                    }
                     self.lysed.insert(to);
                 }
                 if self.nodes.get(&to).is_some_and(|n| n.alive()) {
@@ -485,7 +584,9 @@ impl World {
         self.stats.attempts += 1;
         let refusal = if self.nodes[&to].genome.contains(gene.id) {
             Some(Refusal::Redundant)
-        } else if !self.nodes[&to].will_accept(self.cfg.policy, &self.cfg) {
+        } else if self.nodes[&to].immune_to(gene.id) {
+            Some(Refusal::Immune)
+        } else if !self.nodes[&to].will_accept(&self.cfg) {
             Some(Refusal::Declined)
         } else if self.nodes[&to].restricts(donor_strain, &self.cfg, &mut self.rng) {
             Some(Refusal::Restricted)
@@ -522,10 +623,15 @@ impl World {
     /// Remove a dead node. If transformation is on it broadcasts its mobile genes to its
     /// peers on the way out: a population keeps what its dead knew for a while.
     fn reap(&mut self, id: NodeId, tick: u32, events: &mut Vec<Event>) {
-        let Some(node) = self.nodes.remove(&id) else { return };
         let cause = if self.lysed.contains(&id) { Cause::Lysed } else { Cause::Starved };
+        self.reap_with(id, tick, cause, events);
+    }
+
+    fn reap_with(&mut self, id: NodeId, tick: u32, cause: Cause, events: &mut Vec<Event>) {
+        let Some(node) = self.nodes.remove(&id) else { return };
         if self.cfg.mechanisms.transformation {
-            let genes: Vec<Gene> = node.genome.mobile().map(|c| c.gene.clone()).collect();
+            let genes: Vec<Gene> =
+                node.genome.mobile(self.cfg.offer_unproven).map(|c| c.gene.clone()).collect();
             if !genes.is_empty() {
                 let live: Vec<NodeId> = node
                     .peers
@@ -571,6 +677,16 @@ impl World {
             }
         }
         h
+    }
+
+    /// How many live nodes hold a gene that actually answers `kind` — by function, not by
+    /// gene id, so a discovered variant counts.
+    pub fn solvers(&self, kind: u8) -> usize {
+        let budget = self.cfg.vm_budget;
+        self.nodes
+            .values()
+            .filter(|n| n.genome.iter().any(|c| self.env.solves(&c.gene.code, kind, budget)))
+            .count()
     }
 
     /// How many live nodes hold `gene`.

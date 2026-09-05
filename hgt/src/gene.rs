@@ -188,11 +188,12 @@ impl Genome {
         self.genes.iter().map(|c| c.gene.id)
     }
 
-    /// The genes this node could donate: mobile, and worth mobilising. A node offers what
-    /// has worked for it, which is why a mutated copy that has never answered anything
-    /// dies with its host instead of flooding the network.
-    pub fn mobile(&self) -> impl Iterator<Item = &Carried> + '_ {
-        self.genes.iter().filter(|c| c.gene.mobile && c.proven)
+    /// The genes this node could donate. With `unproven` false — the default — a node
+    /// offers only what is known to work, which is what keeps mutated junk from flooding
+    /// the network; with it true a node offers everything mobile it holds, which is the
+    /// regime that behaviour can be measured against.
+    pub fn mobile(&self, unproven: bool) -> impl Iterator<Item = &Carried> + '_ {
+        self.genes.iter().filter(move |c| c.gene.mobile && (unproven || c.proven))
     }
 
     /// Genes in the order a node should try them: what worked most recently, first.
@@ -250,8 +251,15 @@ impl Genome {
     }
 }
 
-/// Copy `code` with each byte replaced at probability `rate`. Returns `None` if nothing
-/// changed, so callers can keep the parent's gene identity rather than re-hashing.
+/// Copy `code`, flipping one bit in each byte that mutates, at probability `rate` per
+/// byte. Returns `None` if nothing changed, so callers can keep the parent's gene
+/// identity rather than re-hashing.
+///
+/// A single bit, not a fresh random byte: half the time the flip lands in the operand
+/// nibble and leaves the instruction doing the same thing to a slightly different value.
+/// That is what makes the landscape climbable — replacing whole bytes changes the opcode
+/// fifteen times out of sixteen, so almost every mutation is fatal and a lineage cannot
+/// walk anywhere.
 pub fn mutate<R: RngExt>(code: &[u8], rate: f64, rng: &mut R) -> Option<Vec<u8>> {
     if rate <= 0.0 {
         return None;
@@ -260,7 +268,7 @@ pub fn mutate<R: RngExt>(code: &[u8], rate: f64, rng: &mut R) -> Option<Vec<u8>>
     let mut changed = false;
     for b in &mut out {
         if rng.random::<f64>() < rate {
-            *b = rng.random::<u8>();
+            *b ^= 1u8 << rng.random_range(0..8u32);
             changed = true;
         }
     }
@@ -327,6 +335,9 @@ mod tests {
         let m = mutate(&code, 0.5, &mut rng).expect("64 bytes at p=0.5 must change something");
         assert_ne!(fnv1a(&m), fnv1a(&code));
         assert_eq!(m.len(), code.len(), "mutation is substitution, not indel");
+        for (a, b) in code.iter().zip(&m) {
+            assert!((a ^ b).count_ones() <= 1, "a point mutation flips one bit: {a:08b} -> {b:08b}");
+        }
     }
 
     #[test]

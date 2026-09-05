@@ -79,3 +79,65 @@ fn a_deme_with_no_spare_genes_survives_on_what_arrives_over_the_wire() {
     }
     assert!(alone.extinct(), "a deme with no spares and no peers should not survive the shifts");
 }
+
+/// A split network cannot move a gene to the side that needs it, and the population pays
+/// for that at the next shift.
+#[test]
+fn a_partition_costs_the_population_at_the_stressor_it_cannot_answer() {
+    use hgt::config::Mechanisms as M;
+    use hgt::metrics::{Analyzer, Record};
+
+    let base = |partition: Option<u32>| HgtConfig {
+        nodes: 48,
+        max_nodes: 256,
+        founder_carriers: 1,
+        epoch_ticks: 150,
+        hazard_kinds: 3,
+        hazard_gradient: 0.0,
+        partition_at: partition,
+        mechanisms: M::default(),
+        ..HgtConfig::default()
+    };
+
+    let run = |cfg: HgtConfig, seed: u64| {
+        let mut analyzer = Analyzer::new(&cfg, seed);
+        let mut world = World::new(cfg, seed).expect("valid config");
+        for e in world.founding_events() {
+            analyzer.observe(&e);
+        }
+        let (mut min_population, mut cut_frames, mut worst_side) = (usize::MAX, 0, u32::MAX);
+        for _ in 0..600 {
+            for e in world.step() {
+                for rec in analyzer.observe(&e) {
+                    if let Record::Frame(f) = rec {
+                        if f.partitioned {
+                            cut_frames += 1;
+                        }
+                        worst_side = worst_side.min(f.sides.here_solvers.min(f.sides.there_solvers));
+                    }
+                }
+            }
+            min_population = min_population.min(world.population());
+            if world.extinct() {
+                break;
+            }
+        }
+        (min_population, cut_frames, worst_side)
+    };
+
+    for seed in [2u64, 3] {
+        let (whole_min, whole_cuts, _) = run(base(None), seed);
+        let (cut_min, cut_frames, cut_worst) = run(base(Some(0)), seed);
+        assert_eq!(whole_cuts, 0, "no partition was configured, so no frame may report one");
+        assert!(cut_frames > 0, "the partitioned run should report itself partitioned");
+        assert!(
+            cut_min < whole_min,
+            "seed {seed}: a split network bottlenecked at {cut_min}, a whole one at {whole_min}"
+        );
+        assert!(
+            cut_worst < 10,
+            "seed {seed}: one side should be nearly wiped out of answerers, but the worst \
+             it got was {cut_worst}"
+        );
+    }
+}
