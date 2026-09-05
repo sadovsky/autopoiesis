@@ -397,9 +397,10 @@ def main():
     # still equal to what was seeded (mean over seeds).
     hl = defaultdict(list)
     for name, (frames, _, _) in data.items():
-        if not name.startswith("hl_") or not frames:
+        if not (name.startswith("hl_") or name.startswith("hlc_")) or not frames:
             continue
-        tag = name.split("_")[1]
+        parts = name.split("_", 2)
+        tag = parts[1] + (" closed" if parts[0] == "hlc" else " band")
         try:
             with open(os.path.join(exps[name], "config.json")) as f:
                 noise = json.load(f)["noise_rate"]

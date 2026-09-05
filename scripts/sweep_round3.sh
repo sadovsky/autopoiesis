@@ -49,6 +49,14 @@ for nz in 0.0001 0.0003 0.001 0.003 0.01; do
   run "hl_reg_$nz" "$HL_SEEDS" "$HL_TICKS" $REGT --noise "$nz"
 done
 
+# A/C3, closed: the same structures spanning the full torus width at uniform sun, so
+#   there is no open edge to import background bytes; noise is the only perturbation.
+CLOSED="--sun-profile uniform --sun 4 --seed-tiling-width 128"
+for nz in 0.0001 0.0003 0.001 0.003 0.01; do
+  run "hlc_pt_$nz" "$HL_SEEDS" "$HL_TICKS" $PTT $CLOSED --noise "$nz"
+  run "hlc_reg_$nz" "$HL_SEEDS" "$HL_TICKS" $REGT $CLOSED --noise "$nz"
+done
+
 # C1. Perturbation probes (perturb the run, so separate from the clean runs).
 run probe_baseline "$HL_SEEDS" "$TICKS" --probe-every 1000
 run probe_pt "$HL_SEEDS" "$TICKS" $PT --probe-every 1000

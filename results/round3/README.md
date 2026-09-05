@@ -167,3 +167,44 @@ direct operationalisation of the plan's definition, and it reads zero for all of
 bytes still in place); table in `plots/summary.md` and `plots/halflife_vs_noise.png`.
 *(filled in after the re-run.)*
 
+
+### Phase B — the token execution model (`tok_*`, `hl_tok_*`, `hlc_tok_*`, `probe_tok*`)
+
+Sun 1.0 at the bright edge (cells only spend while they hold a token), `token_rate`
+0.02, 20 seeds × 100k unless stated.
+
+| | `tok_null` | `tok_opposite` | `tok_register` | `tok_copyself` | (neighbourhood `baseline`) |
+|---|---|---|---|---|---|
+| SCCs / frame | 0 | 0.0 | 0.1 | 99.7 | 124.8 |
+| core cells / frame | 0 | 0 | 0 | 917 | 8 823 |
+| largest SCC | 0 | 6 | 8 | 4 609 | 13 063 |
+| long-lived organisms (≥ 1 window) | 0 | 462 | 526 | 902 686 | 2 044 350 (50 seeds) |
+| with persistence > 3 | 0 | 0 | 0 | 2 148 | 25 629 |
+| null-ratio median / rows > 3 | — | 0.87 / 0 | 0.83 / 0 | 0.85 / 0 | 0.18 / 0 |
+| repairs / tick | 0 | 82 | 82 | 1 160 | 5 670 |
+| deaths / tick | 94 | 91 | 88 | 154 | 958 |
+| background stability | 0.86 | 0.85 | 0.85 | 0.74 | 0.24 |
+
+* **Code/data decoupling works as designed and leaves nothing.** With template repair
+  (`register`, `opposite`) the token world has essentially no repair graph: a few
+  hundred SCCs of 3–8 cells per 20 runs, none lasting more than 500–900 ticks, none
+  persistent, none more stable than the null twin. Background stability 0.85 equals the
+  twin's 0.86: repair does nothing to the world. Executed instructions fall to 0.19 of
+  the neighbourhood model's (a cell runs only when a token visits) and deaths to a
+  tenth: the substrate is mostly frozen, mutated only by noise.
+* **Copy-self is still a weak replicator under tokens.** `tok_copyself` forms ~100 SCCs
+  per frame (917 core cells, largest 4 609, 6 % of the grid rather than 54 %): a token on
+  a `Repair(d)` byte still writes that byte onward, and a 2-cycle of two cells pointing
+  at each other runs a `Repair` every other tick. 2 148 long-lived organisms exceed
+  persistence 3 — small, transient, and with a null ratio of 0.85 they are still less
+  stable than the repair-disabled world at the same spot. The probe on this world
+  (`probe_tok_copyself`, below) is the direct test.
+* **The designed strips.** The strip pattern's diagonal relays read from the
+  neighbouring strip, so an 8-column band has an open west edge that imports background
+  bytes every lap, and the belt then floods the band: at 128×128 the seeded bytes are
+  47 % intact after 100 ticks and 1 % after 10 000, identically at noise 10⁻⁴ and 10⁻²
+  (`hl_tok_*`, `tok_strip_ramp`). That number is edge import, not noise. The closed
+  version (`hlc_*`: full width, uniform sun, noise the only perturbation) is what
+  measures the belt's own response to noise; its table is in `plots/summary.md`.
+  *(filled in below when the closed runs finish.)*
+

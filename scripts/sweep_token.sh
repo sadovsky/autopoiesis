@@ -44,8 +44,15 @@ for nz in 0.0001 0.0003 0.001 0.003 0.01; do
   run "hl_tok_$nz" "$HL_SEEDS" "$HL_TICKS" $STRIP --noise "$nz"
 done
 
+# Closed strips: full width, uniform sun — no open edge, noise is the only perturbation.
+CLOSED="--sun-profile uniform --seed-tiling-width 128"
+for nz in 0.0001 0.0003 0.001 0.003 0.01; do
+  run "hlc_tok_$nz" "$HL_SEEDS" "$HL_TICKS" $STRIP $CLOSED --noise "$nz"
+done
+
 # Perturbation probes.
 run probe_tok       "$HL_SEEDS" "$TICKS" $TOK --repair-source opposite --probe-every 1000 --probe-min-size 3
 run probe_tok_strip "$HL_SEEDS" "$TICKS" $STRIP --noise 0.0003 --probe-every 1000 --probe-min-size 100
+run probe_tok_copyself "$HL_SEEDS" "$TICKS" $TOK --repair-source copy-self --probe-every 1000
 
 python3 scripts/plot.py "$OUT"
