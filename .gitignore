@@ -1,0 +1,4 @@
+target/
+snapshots/
+results/raw/
+*.bin
