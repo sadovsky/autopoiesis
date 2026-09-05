@@ -13,10 +13,11 @@ graph says is mutually maintaining itself.
 cargo run --release -- --seed 1 --ticks 5000 --render          # watch it
 cargo run --release -- --seed 1 --ticks 100000 --metrics m.jsonl   # measure it
 ./scripts/sweep.sh                                                # the experiment protocol
-cargo test                                                        # 29 tests
+cargo test                                                        # 34 tests
 ```
 
-Results of the protocol in `results/` (see `results/README.md`).
+Results of the protocol in `results/` (see `results/README.md`); the §8 follow-up
+(template repair, no-self-jump, scarcity) in `results/variants/`.
 
 ## Layout
 
@@ -34,7 +35,7 @@ src/
   render.rs    crossterm renderer (tag / ip / instr modes)
   main.rs      CLI: run, `analyze DIR`, `sweep`
 tests/         isa_roundtrip, energy_conservation, vm_loop, snapshot_files, metrics
-scripts/       sweep.sh (protocol), plot.py (figures + summary.md)
+scripts/       sweep.sh (protocol), sweep_variants.sh (§8 follow-up), plot.py (figures + summary.md)
 examples/      ring_trace.rs — print a column of the seeded ring over time
 ```
 
@@ -69,6 +70,18 @@ relative to itself), then `ip` advances by one, wrapping. `MoveIp` / a taken
 region of identical bytes behaves as one program. A cell whose `ip` sits on a
 neighbour's `MoveIp` pointing back at that neighbour is trapped there indefinitely
 (this happens and matters; see results).
+
+**§8 variants** (all off by default; `results/variants/`): `repair_source`
+selects what `Repair` writes — `copy_self` (the plan), `register` (the cell's `reg`,
+so maintenance must be a `Load`/`Repair` loop) or `previous` (the byte of the
+neighbourhood slot executed just before the `Repair`); `no_self_jump` makes a jump
+back onto the slot currently being fetched from advance instead, which breaks the
+`MoveIp` self-loop trap. Energy scarcity is just `--sun 3` (below the Repair cost).
+`scripts/sweep_variants.sh` runs them singly and combined. `--seed-tiling` injects a
+hand-written *template* structure for the register mode: columns whose rows alternate
+`Repair(S)`/`Load(N)`, so each cell restores its south neighbour from its north
+neighbour's byte (an independent copy); with no open edge it is an exact fixed point,
+which copy-self repair cannot express (`tests/variants.rs`).
 
 **Write conflicts**: several cells writing one target in a tick → highest energy wins,
 ties → lowest index. **Energy**: transfers are clamped and applied in index order;
@@ -130,7 +143,8 @@ code and produce byte-identical output for the same seed.
 ```
 autopoiesis [--seed N] [--ticks N] [--config cfg.json] [--width W --height H]
             [--noise p | --noise-ramp a:b:n] [--sun S --sun-profile linear|gaussian|uniform]
-            [--repair-cost C] [--seed-ring [--seed-ring-x X] [--seed-ring-width W]]
+            [--repair-cost C] [--repair-source copy-self|register|previous] [--no-self-jump]
+            [--seed-ring [--seed-ring-x X] [--seed-ring-width W]]
             [--render [--show tag|ip|instr] [--render-every N] [--fps F]]
             [--snapshots DIR [--snapshot-every N]] [--metrics FILE [--analysis-every N]]
             [--progress N] [--dump-config]

@@ -134,3 +134,41 @@ fn no_self_jump_breaks_the_move_ip_trap() {
     sim.step();
     assert_eq!(sim.cur.get(2, 2).ip, NE + 1);
 }
+
+#[test]
+fn closed_loop_template_tiling_is_a_fixed_point_only_under_register_repair() {
+    // Full-width band: every column is a torus-spanning loop of alternating
+    // Repair(S)/Load(N) rows with no open edge. Under register repair each cell keeps
+    // rewriting its south neighbour from its north neighbour's byte and the pattern is
+    // exactly stable; under copy-self the same seed destroys itself.
+    let intact_after = |src: RepairSource, ticks: u32| {
+        let cfg = SimConfig {
+            width: 16,
+            height: 16,
+            sun: 3.0,
+            sun_profile: SunProfile::Uniform,
+            noise_rate: 0.0,
+            repair_source: src,
+            seed_tiling: true,
+            seed_tiling_width: 16,
+            ..SimConfig::default()
+        };
+        let sim0 = Sim::new(cfg.clone(), 3).unwrap();
+        let reference = sim0.cur.clone();
+        let mut sim = Sim::new(cfg, 3).unwrap();
+        sim.run(ticks);
+        let same = sim
+            .cur
+            .cells
+            .iter()
+            .zip(&reference.cells)
+            .filter(|(a, b)| a.instr == b.instr)
+            .count();
+        (same as f64 / reference.cells.len() as f64, sim.stats.repairs, sim.stats.deaths)
+    };
+    let (frac, repairs, deaths) = intact_after(RepairSource::Register, 3000);
+    assert_eq!(frac, 1.0, "register tiling should be exactly stable");
+    assert!(repairs > 0 && deaths == 0);
+    let (frac, _, _) = intact_after(RepairSource::CopySelf, 3000);
+    assert!(frac < 0.6, "copy-self should not preserve the tiling, intact {frac}");
+}

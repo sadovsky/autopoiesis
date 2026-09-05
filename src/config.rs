@@ -200,6 +200,15 @@ pub struct SimConfig {
     pub seed_ring_x: Option<usize>,
     /// Width in cells of the seeded ring band. Default 1.
     pub seed_ring_width: usize,
+    /// Inject a hand-written *template-repairing tiling* at t = 0: a band of columns
+    /// whose rows alternate `Repair(S)` / `Load(N)`. Under `repair_source = register`
+    /// every cell then restores its south neighbour from the byte of its north
+    /// neighbour (an independent copy), which copy-self repair cannot express; each
+    /// column is a closed torus-spanning loop (height must be even). Default false.
+    pub seed_tiling: bool,
+    /// Width in columns of the seeded tiling band, centred on the brightest column
+    /// unless `seed_ring_x` is set (then it starts there). Default 8.
+    pub seed_tiling_width: usize,
 }
 
 impl Default for SimConfig {
@@ -239,6 +248,8 @@ impl Default for SimConfig {
             seed_ring: false,
             seed_ring_x: None,
             seed_ring_width: 1,
+            seed_tiling: false,
+            seed_tiling_width: 8,
         }
     }
 }
@@ -292,6 +303,14 @@ impl SimConfig {
         }
         if self.seed_ring_width == 0 {
             bail!("seed_ring_width must be > 0");
+        }
+        if self.seed_tiling {
+            if self.seed_tiling_width == 0 || self.seed_tiling_width > self.width {
+                bail!("seed_tiling_width must be in 1..=width");
+            }
+            if !self.height.is_multiple_of(2) {
+                bail!("seed_tiling needs an even height (rows alternate Repair(S)/Load(N))");
+            }
         }
         Ok(())
     }

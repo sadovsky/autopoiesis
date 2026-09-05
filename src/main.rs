@@ -71,6 +71,12 @@ struct RunArgs {
     /// Width of the seeded ring band.
     #[arg(long)]
     seed_ring_width: Option<usize>,
+    /// Inject a hand-written template-repairing tiling (rows alternating Repair(S)/Load(N)) at t = 0.
+    #[arg(long)]
+    seed_tiling: bool,
+    /// Width in columns of the seeded tiling band.
+    #[arg(long)]
+    seed_tiling_width: Option<usize>,
     /// Print the effective config as JSON and exit.
     #[arg(long)]
     dump_config: bool,
@@ -193,6 +199,12 @@ fn build_config(a: &RunArgs) -> Result<SimConfig> {
     }
     if let Some(w) = a.seed_ring_width {
         cfg.seed_ring_width = w;
+    }
+    if a.seed_tiling {
+        cfg.seed_tiling = true;
+    }
+    if let Some(w) = a.seed_tiling_width {
+        cfg.seed_tiling_width = w;
     }
     if let Some(s) = a.snapshot_every {
         cfg.snapshot_every = s;
