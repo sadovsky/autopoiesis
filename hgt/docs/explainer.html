@@ -1,0 +1,440 @@
+<title>Programs That Swap Genes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --bg: #F7F5FA;
+    --card: #FFFFFF;
+    --ink: #1B1726;
+    --soft: #5F5872;
+    --line: #E2DDEC;
+    --gene: #6A34CF;
+    --danger: #D9453A;
+    --good: #0E7C63;
+    --highlight: #FCE7A2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14111C;
+      --card: #1C1826;
+      --ink: #ECE8F5;
+      --soft: #A79FBC;
+      --line: #2C2639;
+      --gene: #B18BFF;
+      --danger: #FF7A6E;
+      --good: #4FD0AE;
+      --highlight: #4A3F1A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14111C;
+    --card: #1C1826;
+    --ink: #ECE8F5;
+    --soft: #A79FBC;
+    --line: #2C2639;
+    --gene: #B18BFF;
+    --danger: #FF7A6E;
+    --good: #4FD0AE;
+    --highlight: #4A3F1A;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: 20px;
+    line-height: 1.68;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 56px 24px 110px;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  .kicker {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gene);
+  }
+  h1 {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: clamp(40px, 8vw, 72px);
+    font-weight: 800;
+    line-height: 0.98;
+    letter-spacing: -0.03em;
+    margin: 10px 0 0;
+    text-wrap: balance;
+  }
+  .dek {
+    font-size: 23px;
+    line-height: 1.45;
+    color: var(--soft);
+    margin: 18px 0 0;
+    max-width: 34ch;
+  }
+
+  h2 {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: clamp(26px, 4.4vw, 34px);
+    font-weight: 600;
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  section { display: flex; flex-direction: column; gap: 18px; }
+  p { margin: 0; }
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+
+  .lede { font-size: 22px; line-height: 1.55; }
+
+  ul { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 12px; }
+  li::marker { color: var(--gene); }
+
+  code {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.8em;
+    background: var(--card);
+    border: 1px solid var(--line);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+
+  /* the one flourish: a highlighter behind the sentence that matters */
+  .mark {
+    background: linear-gradient(transparent 58%, var(--highlight) 58%);
+    padding: 0 2px;
+  }
+
+  .aside {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 22px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .aside h3 {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin: 0;
+    color: var(--gene);
+  }
+  .aside p { font-size: 17px; line-height: 1.6; color: var(--soft); }
+
+  .scoreboard {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px;
+  }
+  .score {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .score .n {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: 38px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .score .t {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--soft);
+  }
+  .score.bad .n { color: var(--danger); }
+  .score.good .n { color: var(--good); }
+
+  figure { margin: 0; display: flex; flex-direction: column; gap: 12px; }
+  figcaption {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--soft);
+  }
+  .diagram {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px;
+    overflow-x: auto;
+  }
+  .diagram svg { width: 100%; height: auto; display: block; min-width: 460px; }
+  .diagram text {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: 13px;
+    fill: var(--soft);
+  }
+  .diagram .lbl { font-weight: 600; fill: var(--ink); }
+
+  .steps { display: flex; flex-direction: column; gap: 16px; }
+  .step {
+    display: grid;
+    grid-template-columns: 42px 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+  .step .num {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--card);
+    background: var(--gene);
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    margin-top: 4px;
+  }
+  .step p { font-size: 18px; }
+  .step b { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-weight: 600; }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--line);
+    margin: 0;
+  }
+
+  footer {
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--soft);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  @media (max-width: 620px) {
+    body { font-size: 18px; }
+    .page { padding: 40px 20px 80px; gap: 32px; }
+    .dek { font-size: 20px; }
+  }
+</style>
+
+<div class="page">
+
+<header>
+  <div class="kicker">Small experiments</div>
+  <h1>Programs That Swap Genes</h1>
+  <p class="dek">We built a tiny world where software passes working code to strangers, the way
+    bacteria do. Here is what it taught us.</p>
+</header>
+
+<section>
+  <p class="lede">Bacteria have a trick that looks like cheating. When one of them works out how to
+  survive an antibiotic, it doesn't have to pass that ability to its children and wait. It can hand
+  the gene <em>sideways</em> — to a neighbour, to a stranger, sometimes to a completely different
+  species. That's why resistance spreads through a hospital faster than any single bacterial family
+  tree could carry it.</p>
+  <p>Biologists call it <strong>horizontal gene transfer</strong>. Everything in your biology
+  textbook about traits passing from parent to child is the <em>vertical</em> kind. This is the
+  other one.</p>
+  <p>We wondered what happens if you give software the same trick — not as a metaphor, but
+  literally: little programs, holding little programs, mailing them to each other over a network.
+  So we built it.</p>
+</section>
+
+<figure>
+  <div class="diagram">
+    <svg viewBox="0 0 640 250" role="img"
+         aria-label="A family tree with one gene inherited down the branches, and one gene handed sideways to an unrelated node">
+      <!-- vertical tree -->
+      <g stroke="var(--line)" stroke-width="2" fill="none">
+        <path d="M90 46 L50 110 M90 46 L130 110 M50 110 L28 186 M50 110 L72 186 M130 110 L112 186 M130 110 L154 186"/>
+        <path d="M470 46 L430 110 M470 46 L510 110 M430 110 L408 186 M430 110 L452 186 M510 110 L492 186 M510 110 L534 186"/>
+      </g>
+      <g fill="var(--good)">
+        <circle cx="90" cy="46" r="9"/><circle cx="50" cy="110" r="9"/><circle cx="130" cy="110" r="9"/>
+        <circle cx="28" cy="186" r="9"/><circle cx="72" cy="186" r="9"/>
+        <circle cx="112" cy="186" r="9"/><circle cx="154" cy="186" r="9"/>
+      </g>
+      <g fill="var(--soft)" opacity="0.45">
+        <circle cx="470" cy="46" r="9"/><circle cx="430" cy="110" r="9"/><circle cx="510" cy="110" r="9"/>
+        <circle cx="408" cy="186" r="9"/><circle cx="534" cy="186" r="9"/>
+      </g>
+      <g fill="var(--gene)">
+        <circle cx="452" cy="186" r="9"/><circle cx="492" cy="186" r="9"/>
+      </g>
+      <!-- the sideways handoff -->
+      <path d="M166 182 C 260 146, 350 146, 438 180" stroke="var(--gene)" stroke-width="2.5"
+            fill="none" stroke-dasharray="7 5"/>
+      <path d="M444 184 l-13 -8 l1 13 z" fill="var(--gene)"/>
+      <text class="lbl" x="90" y="24" text-anchor="middle">one family</text>
+      <text class="lbl" x="470" y="24" text-anchor="middle">a stranger's family</text>
+      <text x="280" y="146" text-anchor="middle">the gene, handed sideways</text>
+      <text x="90" y="222" text-anchor="middle">everyone here inherited it</text>
+      <text x="472" y="222" text-anchor="middle">these two didn't</text>
+    </svg>
+  </div>
+  <figcaption>Green nodes got the gene the ordinary way: from a parent. The two purple ones on the
+    right got it from someone they aren't related to. That's the whole idea — and in the real
+    version, that dashed arrow is a TCP connection.</figcaption>
+</figure>
+
+<section>
+  <h2>What's in the box</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="num">1</div>
+      <p><b>Little programs that live and die.</b> Each one has an energy budget. It pays rent every
+      tick. If it runs out, it dies. If it does well, it splits in two and its child inherits a
+      slightly mutated copy of everything it had.</p>
+    </div>
+    <div class="step">
+      <div class="num">2</div>
+      <p><b>A world that keeps changing the question.</b> Every tick the environment shouts a
+      number, and a program has to shout back the right answer to get paid. Every three hundred
+      ticks the rule for computing that answer changes completely.</p>
+    </div>
+    <div class="step">
+      <div class="num">3</div>
+      <p><b>Genes that are actually code.</b> A gene is twenty bytes of bytecode that <em>computes</em>
+      the answer. Not a flag saying "resistant" — an actual little program, which runs, and which a
+      single wrong byte will break.</p>
+    </div>
+    <div class="step">
+      <div class="num">4</div>
+      <p><b>Three ways to pass one on.</b> Hand it to a neighbour who asks for it. Leak it into the
+      neighbourhood when you die, for whoever picks it up. Or let a virus carry it off to somebody
+      who never asked.</p>
+    </div>
+  </div>
+  <p>At the start, almost nobody can answer the questions that haven't been asked yet. Two programs
+  out of forty-eight hold the gene for the <em>next</em> crisis. Two hold the one after that.
+  Everyone else is living happily on the answer to today.</p>
+</section>
+
+<section>
+  <h2>Then the question changes</h2>
+  <p>Turn the sharing off, and the story is short. The first time the world changes, the population
+  is fine: enough of the founders' descendants happen to carry the new answer. The second time, it
+  isn't. Every single run died, at almost exactly the same moment.</p>
+  <div class="scoreboard">
+    <div class="score bad">
+      <div class="n">0 / 8</div>
+      <div class="t">populations survive with no sharing — all extinct by the second change</div>
+    </div>
+    <div class="score good">
+      <div class="n">8 / 8</div>
+      <div class="t">survive all ten changes when genes can move sideways</div>
+    </div>
+    <div class="score">
+      <div class="n">55%</div>
+      <div class="t">already had the answer <em>before</em> the question was asked</div>
+    </div>
+  </div>
+  <p>That last number is the one that surprised us, and it changed how we thought about the whole
+  thing.</p>
+</section>
+
+<section>
+  <h2>Sharing isn't a rescue. It's insurance.</h2>
+  <p>We assumed transfer would look like a rescue: crisis hits, everyone starts dying, the gene races
+  through the survivors, population recovers. That's not what happens.</p>
+  <p><span class="mark">By the time the new question arrives, half the population already has the
+  answer.</span> The gene had been quietly circulating for hundreds of ticks — copied between
+  strangers who had no use for it, because it cost almost nothing to carry and somebody offered.
+  When the crisis lands, most of the population simply isn't affected.</p>
+  <p>Without sharing, the same gene sits in the two programs that were born with it, and those two
+  have to be lucky enough to still be alive. Usually they aren't.</p>
+  <div class="aside">
+    <h3>Why the "dead people's DNA" route is the weak one</h3>
+    <p>Of the three ways to pass a gene on, the one where you leak your genes as you die works
+    worst — and once you see why, it's obvious. The programs that die are mostly the ones that
+    <em>didn't have</em> the useful gene. Inheriting from the dead means inheriting from the people
+    the crisis already selected against.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Can a program work out an answer on its own?</h2>
+  <p>Everything above just moves genes that already exist somewhere. So we asked a harder question:
+  can a lineage <em>invent</em> one? We started populations a known distance from a working gene —
+  four wrong bits, eight, twelve, sixteen — and let them mutate.</p>
+  <p>Four bits away, they walk to it. Sixteen bits away, nobody ever gets there, in any run we did.
+  And the reason turns out to be arithmetic rather than bad luck: each wrong bit costs exactly a
+  sixteenth of the credit a program earns, so at sixteen wrong bits it earns nothing at all. There's
+  no longer any signal saying "warmer". <span class="mark">Evolution can't climb a hill that
+  isn't there.</span></p>
+  <p>Then we found something better. The gene has two parts: a long number, and a small "rotate by
+  this much" setting. The long number is a hill — get one bit closer, earn a bit more. The rotate
+  setting is a cliff. Every wrong value scrambles the answer completely, so there's no
+  partial credit for being nearly right.</p>
+  <div class="scoreboard">
+    <div class="score good">
+      <div class="n">200</div>
+      <div class="t">ticks to fix the rotate setting when it's <em>one</em> flip wrong</div>
+    </div>
+    <div class="score bad">
+      <div class="n">never</div>
+      <div class="t">when it's two flips wrong — in sixteen runs of ten thousand ticks</div>
+    </div>
+  </div>
+  <p>One step across the gap is a coin flip you'll eventually win. Two steps is a valley, and nothing
+  will pay you to cross it. Real evolution has this problem constantly; it was oddly satisfying to
+  watch a toy have it too.</p>
+</section>
+
+<section>
+  <h2>Three more things we didn't expect</h2>
+  <ul>
+    <li><strong>Freeloaders win, and it doesn't matter.</strong> We gave a few programs a rule:
+    take genes, never give any. Their descendants went from an eighth of the population to two
+    thirds. The population survived anyway — because viruses and dead bodies don't ask permission,
+    so genes kept moving even after the generous programs had been out-competed.</li>
+    <li><strong>An immune system costs you the thing it protects.</strong> We let programs remember
+    viruses that hurt them and refuse those genes forever. Virus deaths dropped six-fold. So did a
+    third of all the useful genes they received — because a memory can't tell a parasite from
+    something you'll need next week.</li>
+    <li><strong>Cutting the network in half kills it.</strong> Split the population into two halves
+    that can't talk, and six runs in eight die. The gene that answers the next question is on one
+    side of the wall; the question is asked on both.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>The bit that's not a metaphor</h2>
+  <p>All of that runs inside one process, which is how you get repeatable numbers. But the same
+  thing runs as four separate operating-system processes, talking over real TCP connections on real
+  ports, with each message a line of JSON you could read with <code>nc</code>.</p>
+  <p>In that version, only the first process starts with the genes for the later crises. The other
+  three start with nothing spare. They survive — on code that arrived as bytes on a socket from a
+  process they never descended from. Turn the sharing off and every one of them dies.</p>
+</section>
+
+<hr>
+
+<footer>
+  <div><strong>Where this came from:</strong> a small Rust sandbox called <code>hgt</code>, built
+    alongside a separate simulation about self-maintaining systems. Every number here comes from a
+    run you can repeat: one seed produces one world, exactly, every time.</div>
+  <div>There's a longer, more technical write-up with the tables, the fitness landscape, and a list
+    of four things we got wrong before we got them right.</div>
+</footer>
+
+</div>

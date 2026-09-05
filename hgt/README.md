@@ -42,6 +42,7 @@ src/
   render.rs     terminal view, coloured by how each node got what it holds
   main.rs       CLI: run, node, arena, analyze, sweep
 tests/          isa_roundtrip, vm_sandbox, hgt_mechanisms, evolution, determinism, transport
+docs/           report.html (the write-up), explainer.html (the same thing, plainly)
 scripts/        demo.sh (every experiment), plot.py (tables and figures)
 configs/        search.json — the regime a gene can be *found* in
 examples/       ab.rs (the A/B on stdout), gene.rs (disassemble a resistance gene)

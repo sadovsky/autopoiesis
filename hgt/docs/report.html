@@ -1,0 +1,823 @@
+<title>Genes on the Wire</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..500&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --paper: #FAFBFB;
+    --panel: #F1F4F4;
+    --ink: #131A1D;
+    --muted: #5D6B70;
+    --rule: #D9E1E2;
+    --vertical: #0E6B60;
+    --lateral: #B4531D;
+    --flat: #8A969A;
+    --shadow: rgba(19, 26, 29, 0.07);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0D1214;
+      --panel: #141B1E;
+      --ink: #E4EBEC;
+      --muted: #8FA0A4;
+      --rule: #232E31;
+      --vertical: #46B7A6;
+      --lateral: #E5904F;
+      --flat: #6C7B80;
+      --shadow: rgba(0, 0, 0, 0.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0D1214;
+    --panel: #141B1E;
+    --ink: #E4EBEC;
+    --muted: #8FA0A4;
+    --rule: #232E31;
+    --vertical: #46B7A6;
+    --lateral: #E5904F;
+    --flat: #6C7B80;
+    --shadow: rgba(0, 0, 0, 0.5);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Newsreader", Georgia, "Times New Roman", serif;
+    font-size: 19px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 72px 28px 120px;
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+  .col { max-width: 68ch; }
+
+  /* ---- masthead ---- */
+  header { display: flex; flex-direction: column; gap: 18px; }
+  .eyebrow {
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--lateral);
+  }
+  h1 {
+    font-size: clamp(38px, 6vw, 62px);
+    font-weight: 500;
+    line-height: 1.04;
+    letter-spacing: -0.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 21px;
+    line-height: 1.5;
+    color: var(--muted);
+    max-width: 60ch;
+    margin: 0;
+    font-style: italic;
+  }
+  .byline {
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    padding: 12px 0;
+  }
+  .byline b { font-weight: 600; color: var(--ink); }
+
+  .abstract {
+    border-left: 3px solid var(--vertical);
+    padding: 4px 0 4px 22px;
+    max-width: 68ch;
+  }
+  .abstract p { margin: 0 0 14px; }
+  .abstract p:last-child { margin-bottom: 0; }
+
+  /* ---- sections ---- */
+  section { display: flex; flex-direction: column; gap: 20px; }
+  h2 {
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--rule);
+  }
+  h2 .n { color: var(--lateral); margin-right: 10px; }
+  h3 {
+    font-size: 25px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    margin: 14px 0 -6px;
+    text-wrap: balance;
+  }
+  p { margin: 0; max-width: 68ch; }
+  section > p + p { margin-top: -6px; }
+  a { color: var(--lateral); text-underline-offset: 3px; }
+  strong { font-weight: 600; }
+  em.term { font-style: normal; font-weight: 600; color: var(--vertical); }
+
+  ul { margin: 0; padding-left: 22px; max-width: 68ch; display: flex; flex-direction: column; gap: 10px; }
+  li::marker { color: var(--muted); }
+
+  code, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 0.84em;
+  }
+  code { background: var(--panel); padding: 1px 5px; border-radius: 3px; }
+
+  pre {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.65;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    padding: 18px 20px;
+    margin: 0;
+    overflow-x: auto;
+    border-radius: 2px;
+  }
+  pre .c { color: var(--muted); }
+  pre .k { color: var(--lateral); }
+
+  /* ---- tables ---- */
+  .tablewrap { overflow-x: auto; }
+  table {
+    border-collapse: collapse;
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 14px;
+    width: 100%;
+    font-variant-numeric: tabular-nums;
+  }
+  caption {
+    caption-side: top;
+    text-align: left;
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--muted);
+    padding-bottom: 10px;
+  }
+  th, td { padding: 8px 16px 8px 0; text-align: left; }
+  thead th {
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    border-bottom: 1px solid var(--ink);
+    vertical-align: bottom;
+  }
+  tbody tr { border-bottom: 1px solid var(--rule); }
+  tbody tr:last-child { border-bottom: none; }
+  td.num, th.num { text-align: right; padding-right: 24px; }
+  tr.dead td:first-child { color: var(--muted); }
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 2px;
+  }
+  .tag.v { background: color-mix(in srgb, var(--vertical) 16%, transparent); color: var(--vertical); }
+  .tag.l { background: color-mix(in srgb, var(--lateral) 16%, transparent); color: var(--lateral); }
+
+  /* ---- figures ---- */
+  figure {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  figcaption {
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--muted);
+    max-width: 72ch;
+  }
+  figcaption b { color: var(--ink); font-weight: 600; }
+  .chart { width: 100%; height: auto; display: block; overflow: visible; }
+  .chart text {
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 11px;
+    fill: var(--muted);
+  }
+  .chart .axis { stroke: var(--rule); stroke-width: 1; }
+  .chart .grid { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 4; }
+  .chart .serieslabel { font-weight: 600; font-size: 12px; }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 22px;
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+  /* ---- the finding callouts ---- */
+  .findings {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+  .finding {
+    background: var(--paper);
+    padding: 20px 22px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .finding .big {
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 30px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .finding .lbl {
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  .note {
+    background: var(--panel);
+    border-left: 3px solid var(--flat);
+    padding: 16px 20px;
+    max-width: 68ch;
+    font-size: 17px;
+  }
+  .note p { font-size: inherit; }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 20px;
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  @media (max-width: 640px) {
+    body { font-size: 18px; }
+    .wrap { padding: 44px 20px 80px; gap: 36px; }
+  }
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">A sandbox report</div>
+  <h1>Genes on the&nbsp;Wire</h1>
+  <p class="standfirst">A population of programs, an environment that keeps changing the question,
+    and executable genes that move between machines over TCP. What spreads sideways, what has to be
+    found, and where the finding stops.</p>
+  <div class="byline">
+    <span><b>Subject</b> the <span class="mono">hgt</span> crate</span>
+    <span><b>Runs</b> 8–16 seeds per condition</span>
+    <span><b>Determinism</b> one seed, one run</span>
+    <span><b>Tests</b> 60</span>
+  </div>
+</header>
+
+<div class="abstract col">
+  <p>Horizontal gene transfer is the reason a resistance gene can appear in a bacterium whose
+  ancestors never had it. This is a small sandbox that puts the same mechanism into software: nodes
+  hold genes that are <em class="term">actual bytecode</em>, an environment poses a stressor that a
+  gene has to <em class="term">compute</em> the answer to, and genes move between nodes by
+  conjugation, by uptake of the DNA of the dead, and by phages — over a deterministic in-process
+  transport, or over real sockets between operating-system processes.</p>
+  <p>Four results. Transfer keeps populations alive across environmental shifts that kill every
+  population without it, and it does so <em>before</em> the shift rather than after. Genes can also
+  be <em>found</em> — but only inside a horizon whose two halves are a slope and a cliff. Sharing
+  half-finished genes widens the search and loses what it finds; splicing them keeps what is found
+  without widening the search. And a free rider that takes genes and offers none takes over the
+  population, which survives anyway.</p>
+</div>
+
+<section>
+  <h2><span class="n">1</span> The question</h2>
+  <p>Evolution in software is usually modelled vertically: a program is copied, mutated, scored,
+  and the good copies have more children. That is a tree. Biology's more disruptive trick is the
+  graph laid over that tree — a gene crossing from one lineage to another, sometimes across species,
+  carried by a plasmid or a virus. Antibiotic resistance spreads that way faster than any lineage
+  can evolve it.</p>
+  <p>The question this sandbox is built to make measurable is not <em>does transfer happen</em>,
+  which you can arrange by fiat, but <strong>what transfer is worth</strong>: what it buys a
+  population, when it buys it, and what it costs. Everything below is measured from a run, not
+  asserted about a model.</p>
+</section>
+
+<section>
+  <h2><span class="n">2</span> The model</h2>
+
+  <h3>Genes are programs</h3>
+  <p>A gene is up to 64 bytes of code for a small accumulator machine: low nibble opcode, high
+  nibble operand, fifteen instructions, one byte each. One byte per instruction is the load-bearing
+  choice — every byte string is a valid program, so a mutation is a small edit rather than a frame
+  shift, and a truncated transfer is a shorter gene rather than garbage.</p>
+  <p>A gene's identity is the hash of its code. "The same gene" is therefore a fact about the
+  bytes: allele frequency needs no registry, and a mutated copy is honestly a different allele
+  rather than a damaged one.</p>
+
+  <h3>The stressor, and what answers it</h3>
+  <p>Each tick the environment poses a payload word. The correct response is
+  <code>rotate_left(payload ^ key, rot)</code>, with the key and rotation derived from the run's
+  seed. A node survives if one of its genes computes that. The schedule is a pure function of
+  <code>(seed, tick)</code>, so every node derives it independently and there is no environment
+  server sitting at the centre of a supposedly decentralised network.</p>
+  <p>Resistance is a program, and the sandbox will disassemble one for you:</p>
+  <pre><span class="c">stressor 0: answer = rotl(payload ^ 0xff3c3a95, 6)</span>
+  20 bytes  i&lt;|&lt;|&lt;|&lt;|&lt;|&lt;|&lt;|sPX@E
+  <span class="k">Imm</span>(15) <span class="k">Shl</span>(4) <span class="k">Or</span>(15) <span class="k">Shl</span>(4) <span class="k">Or</span>(3) <span class="k">Shl</span>(4) <span class="k">Or</span>(12) <span class="k">Shl</span>(4) <span class="k">Or</span>(3)
+  <span class="k">Shl</span>(4) <span class="k">Or</span>(10) <span class="k">Shl</span>(4) <span class="k">Or</span>(9) <span class="k">Shl</span>(4) <span class="k">Or</span>(5)
+  <span class="k">Swap</span> <span class="k">Payload</span> <span class="k">XorAux</span> <span class="k">Rotl</span>(6) <span class="k">Emit</span></pre>
+  <p>Fourteen of those twenty bytes are the key, built a nibble at a time. That detail turns out to
+  set the shape of everything in section 5.</p>
+
+  <h3>Living, dividing, dying</h3>
+  <p>A node pays to stay alive and pays again per gene it carries, then runs its genes against the
+  stressor until one answers, paying for each trial. Above an energy threshold it divides, and the
+  child inherits the genome with point mutations. At zero energy it dies. At the population ceiling
+  a birth displaces somebody, chosen at random.</p>
+  <p>An exact answer earns full credit; a near miss earns credit in proportion to how close it got.
+  That single knob decides whether working genes can only ever be inherited or received, or can be
+  found.</p>
+
+  <h3>How genes move</h3>
+  <ul>
+    <li><strong>Conjugation</strong> — a three-message handshake: offer, request, transfer. A donor
+    cannot push code into a node that did not ask for it.</li>
+    <li><strong>Transformation</strong> — a dying node broadcasts its mobile genes; peers hold them
+    as fragments and take them up at a rate. Free DNA comes from the dead.</li>
+    <li><strong>Transduction</strong> — a phage needs no handshake and no consent. It infects,
+    sometimes kills, repackages whatever the new host holds, and hops on.</li>
+  </ul>
+  <p>Arrivals are graded by a <strong>restriction barrier</strong> — strain distance sets the odds
+  of refusal, so transfer is a rate rather than a certainty. On top of it, an optional acquired
+  immune memory lets a node that survived a phage cut that gene on sight. What a node offers and
+  accepts is a <strong>heritable trait</strong>, not a global setting.</p>
+</section>
+
+<section>
+  <h2><span class="n">3</span> Method</h2>
+  <p>A run in the simulated transport is fully described by <code>(config, seed)</code>: one RNG
+  stream drawn from in a fixed order, deterministic tie-breaks, and a world hash that two runs at
+  one seed must agree on. Over TCP each process holds a <em>deme</em> and routes envelopes by node
+  id — ownership is arithmetic, so no registry or coordinator is needed to move a gene across a
+  machine boundary. That path is not deterministic and is not meant to be; it exists to show the
+  transfer is network traffic and not a metaphor.</p>
+  <p>All measurement is derived from an event stream — births, acquisitions, losses, deaths,
+  transfer attempts, per-tick aggregates — and nothing else. The analyzer reconstructs each genome
+  from those records rather than reading the world, so measuring live and re-deriving from a log
+  later are the same computation, verified byte-identical rather than asserted. Nothing in the log
+  is a statistic: energy goes in as an integer total and the mean is computed downstream, because a
+  float does not survive a JSON round trip bit-for-bit.</p>
+  <div class="note">
+    <p>The metric that matters most is <strong>incongruence</strong>: the share of a gene's carriers
+    that received it sideways rather than inheriting it. It is identically zero when no mechanism is
+    switched on, which makes it a test as well as a measurement — and it is the thing that makes a
+    gene tree disagree with a family tree, which is the signature that told biologists lateral
+    transfer was happening at all.</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">4</span> What transfer is worth</h2>
+  <p>Eight seeds, 3000 ticks, ten epochs. Every founder can answer the first stressor; for each
+  later one, two founders of forty-eight hold the gene that answers it. Every 300 ticks the stressor
+  changes.</p>
+
+  <figure>
+    <svg id="fig-pop" class="chart" viewBox="0 0 900 320" role="img"
+         aria-label="Population over time with and without gene transfer, seed 0"></svg>
+    <div class="legend">
+      <span><i class="swatch" style="background: var(--vertical)"></i> all three mechanisms</span>
+      <span><i class="swatch" style="background: var(--lateral)"></i> no transfer</span>
+      <span><i class="swatch" style="background: var(--flat)"></i> stressor shifts</span>
+    </div>
+    <figcaption><b>Figure 1.</b> Population at seed 0. Both survive the first shift, because the
+    founders' descendants still carry what it asks for. At the second, the population without
+    transfer is gone — and it is gone in all eight seeds, by tick 614.</figcaption>
+  </figure>
+
+  <div class="tablewrap">
+    <table>
+      <caption>Survival across ten epochs, 8 seeds</caption>
+      <thead>
+        <tr>
+          <th>Mechanism</th>
+          <th class="num">Survived</th>
+          <th class="num">Epochs</th>
+          <th class="num">Gene's frequency at the shift</th>
+          <th class="num">Lateral share</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="dead"><td>none</td><td class="num">0/8</td><td class="num">2</td><td class="num">0.00</td><td class="num">0.000</td></tr>
+        <tr class="dead"><td>transformation</td><td class="num">0/8</td><td class="num">2</td><td class="num">0.00</td><td class="num">0.018</td></tr>
+        <tr><td>conjugation</td><td class="num">4/8</td><td class="num">6</td><td class="num">0.21</td><td class="num">0.047</td></tr>
+        <tr><td>transduction</td><td class="num">8/8</td><td class="num">10</td><td class="num">0.46</td><td class="num">0.053</td></tr>
+        <tr><td>all three</td><td class="num">8/8</td><td class="num">10</td><td class="num">0.55</td><td class="num">0.057</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>The column that explains the rest is the fourth. It is not a measure of rescue; it is how
+  common the answering gene already was <em>at the moment the stressor arrived</em>. With transfer
+  on it is a half to a third of the population; without it, nothing. <strong>Transfer does not
+  rescue a population after the crisis. It distributes the gene before there is one.</strong></p>
+  <p>Transformation alone never manages it, for a reason the model did not have to be told: free DNA
+  comes from the dead, and the dead are mostly those who lacked the gene worth having.</p>
+
+  <figure>
+    <svg id="fig-freq" class="chart" viewBox="0 0 900 300" role="img"
+         aria-label="Frequency of each stressor's answering gene over time"></svg>
+    <div class="legend" id="freq-legend"></div>
+    <figcaption><b>Figure 2.</b> The four resistance genes as a share of the population, all three
+    mechanisms, seed 0. Each gene starts in two nodes of forty-eight and is common long before its
+    stressor arrives. The dips are the shifts: a gene that is not being used decays, and is topped
+    back up by the next round of transfer.</figcaption>
+  </figure>
+
+  <h3>The barrier is a rate</h3>
+  <p>A node refuses arrivals from distant strains with a probability that grows with strain
+  distance, so relatedness sets the flow. Measured as acceptances over attempts that were not
+  already redundant:</p>
+  <div class="tablewrap">
+    <table>
+      <caption>Acceptance rate by strain distance</caption>
+      <thead><tr><th>Strain distance</th><th class="num">Conjugation</th><th class="num">Transformation</th><th class="num">Transduction</th></tr></thead>
+      <tbody>
+        <tr><td>0 — same strain</td><td class="num">0.231</td><td class="num">0.943</td><td class="num">0.284</td></tr>
+        <tr><td>1 bit apart</td><td class="num">0.213</td><td class="num">0.630</td><td class="num">0.197</td></tr>
+        <tr><td>2 bits apart</td><td class="num">0.120</td><td class="num">0.259</td><td class="num">0.113</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">5</span> Can a gene be found?</h2>
+  <p>Everything above moves genes that already exist. The second half of the sandbox asks whether a
+  lineage can arrive at one: a single stressor that never shifts, an income a population can survive
+  on while it searches, and founders a known number of bit flips from a gene that works. Sixteen
+  seeds, ten thousand ticks.</p>
+
+  <div class="tablewrap">
+    <table>
+      <caption>Seeds that found the gene, and the median tick they found it</caption>
+      <thead>
+        <tr>
+          <th>Distance</th>
+          <th class="num">No transfer</th>
+          <th class="num">Transfer, proven genes only</th>
+          <th class="num">Transfer, unproven shared</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>4 bit flips</td><td class="num">7/16 · 3300</td><td class="num">12/16 · 1320</td><td class="num">16/16 · 1430</td></tr>
+        <tr><td>8 bit flips</td><td class="num">9/16 · 3600</td><td class="num">10/16 · 2700</td><td class="num">13/16 · 3280</td></tr>
+        <tr><td>12 bit flips</td><td class="num">3/16 · 6620</td><td class="num">6/16 · 3540</td><td class="num">8/16 · 3970</td></tr>
+        <tr class="dead"><td>16 bit flips</td><td class="num">0/16</td><td class="num">0/16</td><td class="num">0/16</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Transfer helps a search — but only once it is allowed to move things that do not work yet. A
+  node offers a gene when it has seen it work, which makes a half-finished answer nobody's to give;
+  lifting that rule finds the gene in every seed at four bit flips and in half again as many at
+  twelve. What it does not do is keep it. Counting nodes still able to answer at the end of a run:
+  six to eight when only proven genes move, zero to two when everything moves.</p>
+
+  <div class="findings">
+    <div class="finding">
+      <div class="big" style="color: var(--vertical)">16/16</div>
+      <div class="lbl">seeds find the gene at four bit flips when half-finished genes are shared,
+        against 7/16 with no transfer at all</div>
+    </div>
+    <div class="finding">
+      <div class="big" style="color: var(--lateral)">0–2</div>
+      <div class="lbl">nodes can still answer at the end of those runs, against 6–8 when only
+        working genes are offered</div>
+    </div>
+    <div class="finding">
+      <div class="big">0/16</div>
+      <div class="lbl">at sixteen bit flips, under every condition tried — the horizon</div>
+    </div>
+  </div>
+
+  <p><strong>Sharing everything explores; sharing what works consolidates.</strong> They are
+  different jobs, and in this model they trade off against each other.</p>
+
+  <h3>What the horizon is made of</h3>
+  <p>The wall at sixteen bits is not a mystery, and it is worth stating exactly because it is
+  arithmetic rather than observation. A gene whose key is <em>d</em> bits wrong emits an answer
+  <em>d</em> bits wrong, so it scores <code>(16 − d) / 16</code> above chance. At sixteen it is at
+  chance, and there is no slope left to climb. The other half of the landscape is the rotation, and
+  it is flat: every wrong rotation moves every bit of the answer, so no key is worth more than any
+  other until the rotation is right.</p>
+
+  <figure>
+    <svg id="fig-landscape" class="chart" viewBox="0 0 900 300" role="img"
+         aria-label="Credit against key distance, for the right rotation and a wrong one"></svg>
+    <div class="legend">
+      <span><i class="swatch" style="background: var(--vertical)"></i> rotation correct — a slope</span>
+      <span><i class="swatch" style="background: var(--flat)"></i> rotation wrong — flat, at chance</span>
+    </div>
+    <figcaption><b>Figure 3.</b> The fitness landscape, exactly. Both lines are asserted by a test,
+    not fitted: credit falls a sixteenth per wrong key bit and reaches zero at sixteen, and no wrong
+    rotation earns credit at any key distance.</figcaption>
+  </figure>
+
+  <div class="tablewrap">
+    <table>
+      <caption>A slope and a cliff, 16 seeds</caption>
+      <thead><tr><th>Founders start</th><th class="num">Found it</th><th class="num">Median tick</th></tr></thead>
+      <tbody>
+        <tr><td>rotation 1 bit wrong, key correct</td><td class="num">12/16</td><td class="num">200</td></tr>
+        <tr><td>rotation 1 bit wrong, key 4 bits wrong</td><td class="num">12/16</td><td class="num">1390</td></tr>
+        <tr class="dead"><td>rotation 2 bits wrong, key correct</td><td class="num">0/16</td><td class="num">never</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>One bit of rotation error is a single lucky flip away, and a population crosses it in two
+  hundred ticks. Two bits is a valley: the intermediate state pays nothing, so nothing selects for
+  crossing it, and in sixteen seeds and ten thousand ticks nobody does. The population is not
+  searching a hard problem badly. It is searching a smooth problem with a cliff nested inside it,
+  which is a fair description of most real fitness landscapes.</p>
+
+  <h3>Splicing</h3>
+  <p>Transfer moves genes whole. Pairing it with recombination — splice the arrival into a resident
+  copy at a crossover point, so what is integrated is a program neither node had — is the only way
+  two lineages' partial answers can combine.</p>
+  <div class="tablewrap">
+    <table>
+      <caption>Splicing at 0.3 against sharing alone; answerers at the end of the run</caption>
+      <thead>
+        <tr><th>Distance</th><th class="num">Shared, no splicing</th><th class="num">Shared, splicing</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>4 bit flips</td><td class="num">16/16 found · 2 answerers</td><td class="num">15/16 · 5</td></tr>
+        <tr><td>8 bit flips</td><td class="num">13/16 · 0</td><td class="num">11/16 · 12</td></tr>
+        <tr><td>12 bit flips</td><td class="num">8/16 · 2</td><td class="num">6/16 · 30</td></tr>
+        <tr class="dead"><td>16 bit flips</td><td class="num">0/16</td><td class="num">0/16</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Splicing is not a better search: it finds the gene in slightly fewer seeds, because it breaks
+  as many half-answers as it completes, and it does nothing at all beyond the horizon, where no
+  hybrid can be better <em>at</em> anything. What it changes is what happens next. Where an answer
+  is found, five to fifteen times as many nodes still hold one when the run ends.
+  <strong>Recombination here is not a way of finding things. It is a ratchet.</strong></p>
+</section>
+
+<section>
+  <h2><span class="n">6</span> Three shorter results</h2>
+
+  <h3>Free riders take over, and it does not matter</h3>
+  <p>Eight of forty-eight founders start selfish — they accept genes and offer none — and the
+  policy is inherited. Their share rises from a sixth to two thirds in three thousand ticks, and to
+  four fifths when policy is allowed to mutate. All eight seeds survive anyway: a phage and a corpse
+  need no donor's consent, so a population whose donors have been out-competed still moves genes.
+  A world with only conjugation would not be so lucky.</p>
+
+  <h3>An immune system is bought with gene flow</h3>
+  <div class="tablewrap">
+    <table>
+      <caption>Acquired immunity to phage-borne genes</caption>
+      <thead><tr><th>Memory rate</th><th class="num">Phage kills</th><th class="num">Immune refusals</th><th class="num">Transduced acquisitions</th></tr></thead>
+      <tbody>
+        <tr><td>0.0 — no memory</td><td class="num">739</td><td class="num">0</td><td class="num">32,991</td></tr>
+        <tr><td>0.5</td><td class="num">159</td><td class="num">316,115</td><td class="num">22,320</td></tr>
+        <tr><td>1.0</td><td class="num">112</td><td class="num">375,959</td><td class="num">18,815</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Kills fall by a factor of six; a third of the population's transduced gene flow goes with them.
+  An immune memory cannot tell a parasite from a gene you are going to need.</p>
+
+  <h3>Cutting the network kills the population</h3>
+  <p>With one founder holding each future gene and the network split from the start, two of eight
+  seeds survive, against eight of eight when it is whole — and healing the split at tick 400 does
+  not help, because the first shift is at 300 and by then it has happened. The measurement that
+  makes it legible is per-side: the worst-off side of a cut network reaches zero nodes able to
+  answer, where a whole one never falls below twenty-two.</p>
+</section>
+
+<section>
+  <h2><span class="n">7</span> Four things that were wrong first</h2>
+  <p>Each of these was in the model before a measurement removed it. They are the useful part of a
+  report like this, so they are listed rather than quietly fixed.</p>
+  <ul>
+    <li><strong>Unbounded genomes.</strong> Every mutated copy in flight is a new gene, so a
+    population accumulates every copy that ever passed through it and starves under the upkeep.
+    Adding <em>more</em> transfer mechanisms made survival worse until genomes were capped.</li>
+    <li><strong>Deleting long-disused genes.</strong> The obvious fix for the above, and exactly
+    backwards: it removes the spare genes — the reservoir the population needs at the next shift —
+    while leaving the junk that arrived most recently.</li>
+    <li><strong>Evicting the weakest node at the population ceiling.</strong> Sounds like selection;
+    is the opposite. The weakest node is usually one that has just divided and handed half its
+    energy to a child, so it selects against reproducing. Random eviction — a Moran step —
+    is both simpler and less wrong.</li>
+    <li><strong>Mutation as byte replacement.</strong> Replacing a byte changes the opcode fifteen
+    times in sixteen, so nearly every mutation is fatal and no lineage can walk anywhere. A single
+    bit flip lands in the operand half the time and leaves the instruction doing the same thing to a
+    slightly different value. Nothing could be discovered until this changed.</li>
+  </ul>
+  <p>A fifth, smaller one: the fitness signal was noise for a while, because a gene with the wrong
+  rotation scores differently on every payload. Posing the stressor with several payloads per tick
+  and averaging was what let selection hold on to a real gain.</p>
+</section>
+
+<section>
+  <h2><span class="n">8</span> What this model is not</h2>
+  <p>The stressor is a single hidden function, so "fitness" is one dimension and there is no
+  ecology: nodes do not eat each other, cooperate on anything, or occupy space. Recombination is one
+  crossover point, with no homology search and no indels, so every gene is exactly as long as the
+  one it came from. The interpreter is safe because it is tiny, not because it is hardened — this is
+  not a claim about sandboxing untrusted code. The socket path is deliberately not deterministic and
+  has no global observer: each process measures its own deme, because in a real distributed system
+  that is all anyone has.</p>
+  <p>And the headline numbers are eight to sixteen seeds with medians, not confidence intervals.
+  Differences of one or two seeds in the discovery tables are inside the noise, and are described
+  above as trends rather than results.</p>
+</section>
+
+<footer>
+  <div><b>Reproducing</b> — <code>./hgt/scripts/demo.sh</code> runs every experiment in this report
+    and writes the tables; the search sections take about a quarter of an hour. Individual runs:
+    <code>hgt --seed 1 --ticks 3000 --hgt none</code> against <code>--hgt all</code>, and
+    <code>hgt arena --processes 4</code> for the socket path.</div>
+  <div>Every figure and table here is generated from the run data in <code>hgt/results/demo/</code>.
+    A run in the simulated transport is reproducible from <code>(config, seed)</code> alone.</div>
+</footer>
+
+</div>
+
+<script>
+const DATA = {"none":[[0,48],[50,341],[100,511],[150,512],[200,512],[250,512],[300,512],[350,7],[400,52],[450,178],[500,502],[550,512],[600,502]],"all":[[0,48],[50,239],[100,512],[150,512],[200,512],[250,512],[300,512],[350,359],[400,512],[450,512],[500,512],[550,512],[600,512],[650,512],[700,512],[750,512],[800,512],[850,512],[900,512],[950,512],[1000,512],[1050,512],[1100,512],[1150,512],[1200,512],[1250,512],[1300,512],[1350,512],[1400,512],[1450,512],[1500,512],[1550,512],[1600,512],[1650,512],[1700,512],[1750,512],[1800,512],[1850,512],[1900,512],[1950,512],[2000,512],[2050,512],[2100,512],[2150,512],[2200,512],[2250,512],[2300,512],[2350,512],[2400,512],[2450,512],[2500,512],[2550,512],[2600,512],[2650,512],[2700,512],[2750,512],[2800,512],[2850,512],[2900,512],[2950,512]],"conj":[[0,48],[50,291],[100,512],[150,512],[200,512],[250,512],[300,512],[350,410],[400,512],[450,512],[500,512],[550,512],[600,511],[650,177],[700,506],[750,512],[800,512],[850,512],[900,512],[950,512],[1000,512],[1050,512],[1100,512],[1150,512],[1200,512],[1250,512],[1300,512],[1350,512],[1400,512],[1450,512],[1500,512],[1550,512],[1600,512],[1650,512],[1700,512],[1750,512],[1800,512],[1850,512],[1900,512],[1950,512],[2000,512],[2050,512],[2100,512],[2150,512],[2200,512],[2250,512],[2300,512],[2350,512],[2400,512],[2450,512],[2500,512],[2550,512],[2600,512],[2650,512],[2700,512],[2750,512],[2800,512],[2850,512],[2900,512],[2950,512]],"transf":[[0,48],[50,341],[100,512],[150,512],[200,512],[250,512],[300,512],[350,16],[400,112],[450,410],[500,508],[550,503],[600,508]],"transd":[[0,48],[50,291],[100,512],[150,512],[200,512],[250,512],[300,512],[350,298],[400,512],[450,512],[500,512],[550,512],[600,510],[650,347],[700,512],[750,512],[800,512],[850,512],[900,512],[950,321],[1000,512],[1050,512],[1100,512],[1150,512],[1200,511],[1250,512],[1300,512],[1350,512],[1400,512],[1450,512],[1500,512],[1550,512],[1600,512],[1650,512],[1700,512],[1750,512],[1800,512],[1850,512],[1900,512],[1950,512],[2000,512],[2050,512],[2100,512],[2150,512],[2200,512],[2250,512],[2300,512],[2350,512],[2400,512],[2450,512],[2500,512],[2550,512],[2600,512],[2650,512],[2700,512],[2750,512],[2800,512],[2850,512],[2900,512],[2950,512]],"freq_all":[[0,1.0,0.042,0.042,0.042],[50,0.967,0.167,0.331,0.192],[100,0.965,0.137,0.215,0.137],[150,0.951,0.162,0.297,0.203],[200,0.951,0.227,0.369,0.332],[250,0.934,0.24,0.418,0.41],[300,0.916,0.262,0.357,0.383],[350,0.883,0.972,0.571,0.602],[400,0.799,0.975,0.498,0.557],[450,0.807,0.979,0.537,0.557],[500,0.775,0.949,0.533,0.584],[550,0.738,0.924,0.523,0.611],[600,0.73,0.947,0.52,0.609],[650,0.73,0.939,0.979,0.621],[700,0.736,0.893,0.977,0.637],[750,0.719,0.834,0.98,0.635],[800,0.701,0.789,0.977,0.691],[850,0.654,0.771,0.975,0.699],[900,0.645,0.787,0.967,0.725],[950,0.688,0.764,0.953,0.986],[1000,0.688,0.748,0.93,0.984],[1050,0.664,0.746,0.896,0.977],[1100,0.656,0.785,0.869,0.965],[1150,0.633,0.777,0.846,0.971],[1200,0.582,0.766,0.809,0.955],[1250,0.648,0.725,0.799,0.926],[1300,0.658,0.668,0.787,0.9],[1350,0.611,0.654,0.74,0.885],[1400,0.607,0.689,0.742,0.871],[1450,0.611,0.699,0.732,0.818],[1500,0.613,0.674,0.709,0.805],[1550,0.539,0.832,0.697,0.734],[1600,0.535,0.803,0.684,0.723],[1650,0.543,0.816,0.639,0.711],[1700,0.514,0.852,0.631,0.725],[1750,0.492,0.902,0.615,0.725],[1800,0.496,0.902,0.561,0.693],[1850,0.463,0.879,0.984,0.748],[1900,0.451,0.859,0.992,0.754],[1950,0.498,0.836,0.988,0.697],[2000,0.498,0.838,0.982,0.691],[2050,0.488,0.797,0.984,0.727],[2100,0.447,0.777,0.959,0.715],[2150,0.422,0.766,0.92,0.941],[2200,0.436,0.787,0.898,0.916],[2250,0.445,0.791,0.846,0.906],[2300,0.438,0.799,0.822,0.914],[2350,0.426,0.787,0.838,0.928],[2400,0.389,0.754,0.828,0.902],[2450,0.412,0.75,0.805,0.855],[2500,0.418,0.754,0.787,0.828],[2550,0.43,0.73,0.777,0.818],[2600,0.432,0.66,0.775,0.803],[2650,0.432,0.691,0.736,0.812],[2700,0.396,0.674,0.697,0.789],[2750,0.402,0.852,0.637,0.785],[2800,0.375,0.863,0.66,0.777],[2850,0.354,0.848,0.662,0.777],[2900,0.355,0.873,0.688,0.748],[2950,0.352,0.875,0.68,0.752]],"freq_none":[[0,1.0,0.042,0.042,0.042],[50,0.95,0.015,0.021,0.023],[100,0.941,0.006,0.022,0.027],[150,0.947,0.008,0.014,0.006],[200,0.938,0.006,0.012,0.0],[250,0.902,0.008,0.01,0.0],[300,0.918,0.002,0.002,0.0],[350,0.857,1.0,0.0,0.0],[400,0.731,0.923,0.0,0.0],[450,0.685,1.0,0.0,0.0],[500,0.598,0.968,0.0,0.0],[550,0.506,0.92,0.0,0.0],[600,0.438,0.96,0.0,0.0]],"lateral_all":[[0,0.0],[50,0.233],[100,0.0696],[150,0.1947],[200,0.2284],[250,0.2388],[300,0.195],[350,0.1621],[400,0.0807],[450,0.0931],[500,0.1092],[550,0.1126],[600,0.1073],[650,0.0695],[700,0.0756],[750,0.0763],[800,0.0742],[850,0.0773],[900,0.0825],[950,0.0616],[1000,0.0521],[1050,0.0538],[1100,0.054],[1150,0.0611],[1200,0.056],[1250,0.0529],[1300,0.0546],[1350,0.0538],[1400,0.0657],[1450,0.055],[1500,0.0679],[1550,0.0604],[1600,0.0558],[1650,0.0557],[1700,0.0544],[1750,0.059],[1800,0.05],[1850,0.0386],[1900,0.0421],[1950,0.0516],[2000,0.043],[2050,0.0473],[2100,0.0496],[2150,0.0504],[2200,0.0485],[2250,0.0543],[2300,0.0517],[2350,0.055],[2400,0.0543],[2450,0.0529],[2500,0.0459],[2550,0.0456],[2600,0.0547],[2650,0.0491],[2700,0.0519],[2750,0.0475],[2800,0.0522],[2850,0.0474],[2900,0.0645],[2950,0.0585]]};
+</script>
+<script>
+(function () {
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs, text) => {
+    const n = document.createElementNS(NS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+
+  function frame(svg, opts) {
+    const { x0, y0, x1, y1, xmax, ymax, xticks, yticks, ylabel, xlabel, yfmt } = opts;
+    const sx = (v) => x0 + (v / xmax) * (x1 - x0);
+    const sy = (v) => y1 - (v / ymax) * (y1 - y0);
+    yticks.forEach((t) => {
+      svg.appendChild(el("line", { class: "grid", x1: x0, x2: x1, y1: sy(t), y2: sy(t) }));
+      svg.appendChild(el("text", { x: x0 - 10, y: sy(t) + 4, "text-anchor": "end" },
+        yfmt ? yfmt(t) : String(t)));
+    });
+    svg.appendChild(el("line", { class: "axis", x1: x0, x2: x1, y1: y1, y2: y1 }));
+    xticks.forEach((t) => {
+      svg.appendChild(el("text", { x: sx(t), y: y1 + 20, "text-anchor": "middle" }, String(t)));
+    });
+    if (xlabel) svg.appendChild(el("text", { x: (x0 + x1) / 2, y: y1 + 42, "text-anchor": "middle" }, xlabel));
+    if (ylabel) svg.appendChild(el("text", {
+      x: 0, y: 0, "text-anchor": "middle",
+      transform: `translate(${x0 - 46} ${(y0 + y1) / 2}) rotate(-90)`
+    }, ylabel));
+    return { sx, sy };
+  }
+
+  function line(points, sx, sy, color, width) {
+    const d = points.map(([x, y], i) => `${i ? "L" : "M"}${sx(x).toFixed(1)} ${sy(y).toFixed(1)}`).join(" ");
+    return el("path", { d, fill: "none", stroke: color, "stroke-width": width || 2,
+      "stroke-linejoin": "round", "stroke-linecap": "round" });
+  }
+
+  // --- Figure 1: population over time
+  (function () {
+    const svg = document.getElementById("fig-pop");
+    if (!svg || typeof DATA === "undefined") return;
+    const box = { x0: 62, y0: 16, x1: 880, y1: 258 };
+    const { sx, sy } = frame(svg, {
+      ...box, xmax: 3000, ymax: 560,
+      xticks: [0, 600, 1200, 1800, 2400, 3000],
+      yticks: [0, 128, 256, 384, 512],
+      xlabel: "tick", ylabel: "nodes alive"
+    });
+    for (let t = 300; t < 3000; t += 300) {
+      svg.appendChild(el("line", { class: "grid", x1: sx(t), x2: sx(t), y1: box.y0, y2: box.y1,
+        stroke: css("--flat"), "stroke-dasharray": "2 5", opacity: "0.55" }));
+    }
+    svg.appendChild(line(DATA.all, sx, sy, css("--vertical"), 2.2));
+    // The last frame of the run without transfer is at tick 600; the population is gone
+    // by 614, so the series is carried to the tick it actually ended on.
+    const gone = DATA.none.concat([[614, 0]]);
+    svg.appendChild(line(gone, sx, sy, css("--lateral"), 2.2));
+    svg.appendChild(el("circle", { cx: sx(614), cy: sy(0), r: 4, fill: css("--lateral") }));
+    svg.appendChild(el("text", { x: sx(614) + 12, y: sy(0) - 10, fill: css("--lateral"),
+      class: "serieslabel" }, "extinct at tick 614 \u2014 all eight seeds"));
+    svg.appendChild(el("text", { x: sx(2350), y: sy(512) - 14, fill: css("--vertical"),
+      class: "serieslabel", "text-anchor": "middle" }, "at the ceiling for ten epochs"));
+  })();
+
+  // --- Figure 2: allele frequency of the four resistance genes
+  (function () {
+    const svg = document.getElementById("fig-freq");
+    if (!svg || typeof DATA === "undefined") return;
+    const box = { x0: 62, y0: 16, x1: 880, y1: 238 };
+    const { sx, sy } = frame(svg, {
+      ...box, xmax: 3000, ymax: 1.05,
+      xticks: [0, 600, 1200, 1800, 2400, 3000],
+      yticks: [0, 0.25, 0.5, 0.75, 1],
+      yfmt: (t) => (t * 100).toFixed(0) + "%",
+      xlabel: "tick", ylabel: "carriers"
+    });
+    for (let t = 300; t < 3000; t += 300) {
+      svg.appendChild(el("line", { class: "grid", x1: sx(t), x2: sx(t), y1: box.y0, y2: box.y1,
+        stroke: css("--flat"), "stroke-dasharray": "2 5", opacity: "0.5" }));
+    }
+    const colors = [css("--vertical"), css("--lateral"), css("--flat"), css("--ink")];
+    for (let g = 0; g < 4; g++) {
+      const pts = DATA.freq_all.map((row) => [row[0], row[1 + g]]);
+      svg.appendChild(line(pts, sx, sy, colors[g], 1.8));
+    }
+    const legend = document.getElementById("freq-legend");
+    if (legend) {
+      ["stressor 0", "stressor 1", "stressor 2", "stressor 3"].forEach((k, i) => {
+        const span = document.createElement("span");
+        const sw = document.createElement("i");
+        sw.className = "swatch";
+        sw.style.background = colors[i];
+        span.appendChild(sw);
+        span.appendChild(document.createTextNode(" " + k));
+        legend.appendChild(span);
+      });
+    }
+  })();
+
+  // --- Figure 3: the landscape
+  (function () {
+    const svg = document.getElementById("fig-landscape");
+    if (!svg) return;
+    const box = { x0: 62, y0: 20, x1: 880, y1: 232 };
+    const { sx, sy } = frame(svg, {
+      ...box, xmax: 20, ymax: 1.08,
+      xticks: [0, 4, 8, 12, 16, 20],
+      yticks: [0, 0.25, 0.5, 0.75, 1],
+      yfmt: (t) => t.toFixed(2),
+      xlabel: "key bits wrong", ylabel: "credit"
+    });
+    const right = [];
+    for (let d = 0; d <= 20; d++) right.push([d, Math.max(0, (16 - d) / 16)]);
+    const wrong = [];
+    for (let d = 0; d <= 20; d++) wrong.push([d, 0.02]);
+    const flat = line(wrong, sx, sy, css("--flat"), 2.2);
+    flat.setAttribute("stroke-dasharray", "6 4");
+    svg.appendChild(flat);
+    svg.appendChild(line(right, sx, sy, css("--vertical"), 2.4));
+    svg.appendChild(el("line", { x1: sx(16), x2: sx(16), y1: box.y0, y2: box.y1,
+      stroke: css("--lateral"), "stroke-width": 1.5, "stroke-dasharray": "4 4" }));
+    svg.appendChild(el("text", { x: sx(16) - 12, y: box.y0 + 14, fill: css("--lateral"),
+      class: "serieslabel", "text-anchor": "end" }, "horizon \u2014 nothing is found beyond here"));
+    [4, 8, 12].forEach((d) => {
+      svg.appendChild(el("circle", { cx: sx(d), cy: sy((16 - d) / 16), r: 3.5, fill: css("--vertical") }));
+    });
+    svg.appendChild(el("text", { x: sx(4) + 10, y: sy(12 / 16) - 10, fill: css("--vertical") },
+      "the distances populations were started at"));
+    svg.appendChild(el("text", { x: sx(10), y: sy(0.02) - 10, fill: css("--flat") },
+      "any wrong rotation, at any key distance"));
+  })();
+})();
+</script>
