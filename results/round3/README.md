@@ -111,10 +111,59 @@ ISA ever compares two copies.
 
 ## Per-experiment results
 
-*(filled in from `plots/summary.md`)*
+Numbers from `plots/summary.md`. "Persistent" means MI persistence > 3 (the metric of
+rounds 1–2); "null ratio" is a row's byte stability divided by the repair-disabled
+twin's background stability at the same tick and x band; "restored" is the probe's
+fraction of overwritten bytes back to their original value after one window.
 
 ### Phase A — pass-through repair (`pt_random`, `pt_tiling_ramp`, `hl_pt_*`)
 
-### Phase C — null twin, probes, half-lives (`null`, `probe_*`, `hl_*`)
+| | baseline (copy-self) | `pt_random` (pass-through) | `register` |
+|---|---|---|---|
+| SCCs / frame | 124.8 | 54.2 | 16.8 |
+| core cells / frame (of 16 384) | 8 823 | **12 374** | 94 |
+| largest SCC | 13 063 | 14 289 | 951 |
+| long-lived organisms with persistence > 3 | 25 629 (50 seeds) | 2 112 | 0 |
+| repairs / tick | 5 670 | 5 160 | 517 |
+| background stability | 0.24 | 0.24 | 0.72 |
 
-### Phase B — token model (`tok_*`, `hl_tok_*`, `probe_tok*`)
+Pass-through repair is a **bigger** soup than copy-self: fewer, larger components
+covering three quarters of the grid. Relaying bytes through a `Repair`-dense region
+replicates the `Repair` class exactly as copying oneself did — the relayed byte is
+almost always a `Repair`. The seeded strip band (`pt_tiling_ramp`) is swallowed
+within the first frames like the ring was in round 1; under the ramp the soup outlives
+0.005 noise in every seed. Gate: not better than register → phase B.
+
+### Phase C — null twin, probes, half-lives
+
+**Null twin** (`null`, repair disabled): background stability 0.81 at noise 0.001 —
+untouched bytes live ~1 000 ticks, so 80 % survive a window. Every organism row in
+every experiment is *less* stable than the repair-disabled world at its own location:
+median null ratio 0.18 (baseline), 0.27 (pass-through), 0.61 (register); **no row in
+any experiment exceeds a ratio of 3** (0 of 972 399 baseline rows, 0 of 238 766
+register rows, 0 of 179 640 rows with the seeded strips). Whatever the repair graph
+calls an organism is a place where bytes turn over *faster* than if nothing repaired
+anything. This is the cleanest statement yet of what the soup is.
+
+**Perturbation probes** (`probe_*`; 8 core bytes and 8 matched background bytes
+overwritten every 1 000 ticks in the largest organisms, 10 seeds each):
+
+| experiment | probes | size class | restored after 1 window: organism | background | after 5 windows: organism | background |
+|---|---|---|---|---|---|---|
+| `probe_baseline` | 4 924 | ≥ 100 | 0.175 | 0.156 | 0.103 | 0.080 |
+| `probe_pt` | 4 640 | ≥ 100 | 0.219 | 0.174 | 0.106 | 0.068 |
+| `probe_pt_tiling` | 2 158 | ≥ 100 | 0.316 | 0.259 | 0.172 | 0.143 |
+| `probe_register` | 2 663 | 10–99 | 0.269 | 0.279 | 0.116 | 0.119 |
+| `probe_register` | | ≥ 100 | 0.288 | 0.306 | 0.101 | 0.123 |
+
+Restoration inside an organism equals restoration in the matched background to within
+a few points in every substrate. Nothing here actively restores its bytes; the
+10–30 % that comes back is the chance of a churning region (few distinct bytes in a
+soup) or a frozen one (register, where an overwritten byte is simply never touched
+again — and then it is not "restored" either, it stays overwritten). The probe is the
+direct operationalisation of the plan's definition, and it reads zero for all of them.
+
+**Half-lives** (`hl_*`): re-measured with `seed_intact` (fraction of the injected
+bytes still in place); table in `plots/summary.md` and `plots/halflife_vs_noise.png`.
+*(filled in after the re-run.)*
+
