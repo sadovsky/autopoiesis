@@ -6,6 +6,7 @@ pub mod config;
 pub mod energy;
 pub mod grid;
 pub mod isa;
+pub mod metrics;
 pub mod noise;
 pub mod render;
 pub mod sim;

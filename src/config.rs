@@ -142,8 +142,22 @@ pub struct SimConfig {
     pub mi_dilate: usize,
     /// Number of random equal-sized regions averaged for the MI baseline. Default 8.
     pub mi_samples: usize,
-    /// Interval in ticks between snapshots / metric frames. Default 100.
+    /// Cap on the number of region cells fed into one MI estimate (larger regions are
+    /// evenly subsampled; the random baseline uses the same count). 0 = no cap.
+    /// Default 512.
+    pub mi_max_cells: usize,
+    /// Number of random permutations of the time pairing used to estimate and subtract
+    /// the finite-sample bias of the MI estimate (shuffle correction). Default 4.
+    pub mi_shuffles: usize,
+    /// Resolution floor (bits) added to both sides of the persistence ratio; roughly
+    /// the sampling noise of the corrected MI estimate at a few hundred samples.
+    /// Default 0.05.
+    pub mi_floor: f64,
+    /// Interval in ticks between snapshot files. Default 100.
     pub snapshot_every: u32,
+    /// Interval in ticks between online metric frames (repair-graph SCCs, MI, organism
+    /// tracking). Several frames per `window` let MI samples pool. Default 20.
+    pub analysis_every: u32,
     /// Inject a hand-written repairing ring (a torus-spanning column of `Repair(S)`)
     /// at t = 0. Default false.
     pub seed_ring: bool,
@@ -176,7 +190,11 @@ impl Default for SimConfig {
             mi_lag: 100,
             mi_dilate: 1,
             mi_samples: 8,
+            mi_max_cells: 512,
+            mi_shuffles: 4,
+            mi_floor: 0.05,
             snapshot_every: 100,
+            analysis_every: 20,
             seed_ring: false,
             seed_ring_x: None,
             seed_ring_width: 1,
@@ -219,8 +237,8 @@ impl SimConfig {
         if self.sun < 0.0 || !self.sun.is_finite() {
             bail!("sun must be finite and >= 0");
         }
-        if self.snapshot_every == 0 {
-            bail!("snapshot_every must be > 0");
+        if self.snapshot_every == 0 || self.analysis_every == 0 {
+            bail!("snapshot_every and analysis_every must be > 0");
         }
         if self.window == 0 {
             bail!("window must be > 0");

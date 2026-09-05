@@ -13,45 +13,64 @@ use std::collections::VecDeque;
 
 pub type Rng = Xoshiro256PlusPlus;
 
-/// Rolling log of `(source, target)` repair events for the last `window` ticks.
+/// Rolling log of repair events for the last `window` ticks.
+///
+/// Events are `(source, direction)`; since a cell can only target its 8 neighbours,
+/// the windowed edge multiset is kept as dense per-cell direction counts that are
+/// incremented when a tick is added and decremented when it falls out of the window.
+/// Producing the edge set is then a linear scan, not a sort of every raw event.
 #[derive(Clone, Debug, Default)]
 pub struct RepairLog {
     window: u32,
-    per_tick: VecDeque<Vec<(u32, u32)>>,
-    spare: Vec<Vec<(u32, u32)>>,
+    per_tick: VecDeque<Vec<(u32, u8)>>,
+    counts: Vec<[u16; 8]>,
+    spare: Vec<Vec<(u32, u8)>>,
 }
 
 impl RepairLog {
-    pub fn new(window: u32) -> RepairLog {
+    pub fn new(window: u32, n_cells: usize) -> RepairLog {
         RepairLog {
             window: window.max(1),
             per_tick: VecDeque::new(),
+            counts: vec![[0u16; 8]; n_cells],
             spare: Vec::new(),
         }
     }
 
     /// Take an empty buffer to fill for the current tick.
-    pub fn begin_tick(&mut self) -> Vec<(u32, u32)> {
+    pub fn begin_tick(&mut self) -> Vec<(u32, u8)> {
         let mut v = self.spare.pop().unwrap_or_default();
         v.clear();
         v
     }
 
     /// Store the current tick's events, evicting ticks older than the window.
-    pub fn end_tick(&mut self, events: Vec<(u32, u32)>) {
+    pub fn end_tick(&mut self, events: Vec<(u32, u8)>) {
+        for &(src, d) in &events {
+            self.counts[src as usize][(d & 7) as usize] += 1;
+        }
         self.per_tick.push_back(events);
         while self.per_tick.len() as u32 > self.window {
             if let Some(old) = self.per_tick.pop_front() {
+                for &(src, d) in &old {
+                    let c = &mut self.counts[src as usize][(d & 7) as usize];
+                    *c = c.saturating_sub(1);
+                }
                 self.spare.push(old);
             }
         }
     }
 
-    /// Deduplicated, sorted edge set over the window.
-    pub fn edges(&self) -> Vec<(u32, u32)> {
-        let mut e: Vec<(u32, u32)> = self.per_tick.iter().flatten().copied().collect();
-        e.sort_unstable();
-        e.dedup();
+    /// Deduplicated `(source, target)` edge set over the window, grouped by source.
+    pub fn edges(&self, topo: &Topology) -> Vec<(u32, u32)> {
+        let mut e = Vec::new();
+        for (src, dirs) in self.counts.iter().enumerate() {
+            for (d, &c) in dirs.iter().enumerate() {
+                if c > 0 {
+                    e.push((src as u32, topo.neighbor(src, d as u8) as u32));
+                }
+            }
+        }
         e
     }
 
@@ -134,7 +153,7 @@ impl Sim {
             vm: Vm::new(n),
             sun: SunField::new(&cfg),
             diffusion_scratch: Vec::new(),
-            repair_log: RepairLog::new(cfg.window),
+            repair_log: RepairLog::new(cfg.window, n),
             stats: RunStats::default(),
             last_step: StepStats::default(),
             rng,
@@ -146,6 +165,11 @@ impl Sim {
 
     pub fn noise_rate(&self) -> f64 {
         self.cfg.noise_rate_at(self.tick)
+    }
+
+    /// Repair-graph edge set over the current window.
+    pub fn repair_edges(&self) -> Vec<(u32, u32)> {
+        self.repair_log.edges(&self.topo)
     }
 
     /// Advance one tick.

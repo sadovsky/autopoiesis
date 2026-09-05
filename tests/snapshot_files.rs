@@ -20,7 +20,7 @@ fn snapshots_written_to_disk_load_back_losslessly() {
             tick: sim.tick,
             noise_rate: sim.noise_rate(),
             grid: sim.cur.clone(),
-            edges: sim.repair_log.edges(),
+            edges: sim.repair_edges(),
         };
         snap.write(&Snapshot::path_for(&dir, sim.tick)).unwrap();
         written.push(snap);

@@ -67,7 +67,7 @@ impl Vm {
 
     /// Execute one instruction for every cell. `next` must already be a copy of
     /// `cur`. Every executed `Repair` (winner or not) is appended to `repairs` as
-    /// `(source, target)`.
+    /// `(source, direction)`.
     pub fn step<R: RngExt>(
         &mut self,
         cfg: &SimConfig,
@@ -75,7 +75,7 @@ impl Vm {
         cur: &Grid,
         next: &mut Grid,
         rng: &mut R,
-        repairs: &mut Vec<(u32, u32)>,
+        repairs: &mut Vec<(u32, u8)>,
     ) -> StepStats {
         debug_assert_eq!(cur.len(), next.len());
         let n = cur.len();
@@ -123,7 +123,7 @@ impl Vm {
                 Instruction::Repair(d) => {
                     let t = topo.neighbor(i, d);
                     self.propose_write(t, c.energy, c.instr, Some(c.tag), &mut stats);
-                    repairs.push((i as u32, t as u32));
+                    repairs.push((i as u32, d & 7));
                     stats.repairs += 1;
                 }
                 Instruction::Cmp(d) => {

@@ -50,7 +50,7 @@ fn four_cell_loop_survives_10k_ticks_without_noise() {
     assert!(sim.stats.repairs > 0);
     assert_eq!(sim.stats.deaths, 0, "nobody should starve at sun=3");
     // Every ring cell repaired and was repaired: edge set is the 4-cycle.
-    let edges = sim.repair_log.edges();
+    let edges = sim.repair_edges();
     let row: Vec<u32> = (0..4).map(|x| sim.cur.idx(x, 1) as u32).collect();
     for (k, &a) in row.iter().enumerate() {
         let b = row[(k + 1) % 4];
