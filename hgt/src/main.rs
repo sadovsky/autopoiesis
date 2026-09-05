@@ -6,6 +6,7 @@ use hgt::config::{HgtConfig, Mechanisms};
 use hgt::event::Event;
 use hgt::metrics::{Analyzer, Record};
 use hgt::node::Policy;
+use hgt::render::{Renderer, ShowMode, status};
 use hgt::tcp::{ID_STRIDE, TcpTransport, founder_ids, id_base};
 use hgt::world::World;
 use rayon::prelude::*;
@@ -75,6 +76,19 @@ struct RunArgs {
     /// Genes a node can hold.
     #[arg(long)]
     max_genes: Option<usize>,
+
+    /// Watch the population in the terminal.
+    #[arg(long)]
+    render: bool,
+    /// What the renderer paints.
+    #[arg(long, value_enum, default_value_t = ShowMode::Resistance)]
+    show: ShowMode,
+    /// Frames per second cap; 0 for uncapped.
+    #[arg(long, default_value_t = 30.0)]
+    fps: f64,
+    /// Draw every N ticks.
+    #[arg(long, default_value_t = 1)]
+    render_every: u32,
 
     /// Write metric records here, one JSON object per line ("-" for stdout).
     #[arg(long)]
@@ -244,6 +258,8 @@ struct RunSummary {
     policy: String,
     population: usize,
     extinct_at: Option<u32>,
+    /// The user quit the renderer before the run finished.
+    interrupted: bool,
     epochs_survived: u32,
     births: u64,
     deaths: u64,
@@ -304,6 +320,9 @@ fn run(cfg: HgtConfig, a: &RunArgs) -> Result<RunSummary> {
         lateral_share: 0.0,
     };
     let mut extinct_at = None;
+    let mut renderer = if a.render { Some(Renderer::new(a.show, a.fps)?) } else { None };
+    let render_every = a.render_every.max(1);
+    let mut interrupted = false;
 
     for e in world.founding_events() {
         if let Some(w) = &mut events {
@@ -319,7 +338,14 @@ fn run(cfg: HgtConfig, a: &RunArgs) -> Result<RunSummary> {
             }
             out.take(analyzer.observe(&e))?;
         }
-        if a.progress > 0 && t.is_multiple_of(a.progress) {
+        if let Some(r) = &mut renderer
+            && t.is_multiple_of(render_every)
+            && !r.frame(&world, &status(&world, out.lateral_share))?
+        {
+            interrupted = true;
+            break;
+        }
+        if a.progress > 0 && renderer.is_none() && t.is_multiple_of(a.progress) {
             eprintln!("tick {t}: {} nodes", world.population());
         }
         if world.extinct() {
@@ -327,7 +353,9 @@ fn run(cfg: HgtConfig, a: &RunArgs) -> Result<RunSummary> {
             break;
         }
     }
+    drop(renderer);
     out.take(analyzer.finish())?;
+
 
     let summary = RunSummary {
         kind: "summary",
@@ -337,6 +365,7 @@ fn run(cfg: HgtConfig, a: &RunArgs) -> Result<RunSummary> {
         policy: format!("{:?}", cfg.policy).to_lowercase(),
         population: world.population(),
         extinct_at,
+        interrupted,
         epochs_survived: out.epochs_survived,
         births: world.stats.births,
         deaths: world.stats.deaths,
@@ -413,6 +442,7 @@ fn sweep(cfg: HgtConfig, a: &RunArgs, seeds: &[u64], out: &Path, jobs: Option<us
         args.metrics = Some(out.join(format!("seed_{seed}.jsonl")));
         args.events = None;
         args.progress = 0;
+        args.render = false;
         match run(cfg.clone(), &args) {
             Ok(s) => summaries.lock().expect("lock").push(s),
             Err(e) => failures.lock().expect("lock").push(format!("seed {seed}: {e:#}")),

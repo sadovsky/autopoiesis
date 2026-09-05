@@ -3,3 +3,5 @@ snapshots/
 *.bin
 # raw per-seed sweep output is large; only config, summaries and plots are tracked
 results/*/seed_*.jsonl
+hgt/results/**/seed_*.jsonl
+hgt/results/**/node_*.jsonl

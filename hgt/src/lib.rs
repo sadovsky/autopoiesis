@@ -13,6 +13,7 @@ pub mod isa;
 pub mod metrics;
 pub mod node;
 pub mod protocol;
+pub mod render;
 pub mod tcp;
 pub mod transport;
 pub mod vm;

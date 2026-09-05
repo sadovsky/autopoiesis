@@ -59,6 +59,10 @@ pub struct BarrierRow {
     pub distance: u32,
     pub attempts: u64,
     pub accepted: u64,
+    /// Attempts that could never have succeeded because the recipient already held the
+    /// gene. Phages retry indiscriminately, so without this the barrier's effect is
+    /// buried under redundant traffic.
+    pub redundant: u64,
 }
 
 /// One gene's standing in the live population.
@@ -300,7 +304,10 @@ impl Analyzer {
                         row.accepted += 1;
                         self.refusals.accepted += 1;
                     }
-                    Some(Refusal::Redundant) => self.refusals.redundant += 1,
+                    Some(Refusal::Redundant) => {
+                        row.redundant += 1;
+                        self.refusals.redundant += 1;
+                    }
                     Some(Refusal::Restricted) => self.refusals.restricted += 1,
                     Some(Refusal::Broke) => self.refusals.broke += 1,
                     Some(Refusal::Declined) => self.refusals.declined += 1,

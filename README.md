@@ -147,3 +147,11 @@ No genome or replication op (a region that repairs into dead space *is* reproduc
 and this is observed), no hardcoded organism boundary (only the repair graph), no
 optimisation beyond what the sweep needed (dense repair-edge counts, MI subsampling,
 `rayon` only across seeds), ISA held at 11 ops.
+
+## A second crate: `hgt/`
+
+Separate from this simulation, `hgt/` is a small sandbox for **horizontal gene transfer
+between networked programs**: software nodes holding executable genes, facing a shifting
+stressor, passing genes to each other by conjugation, uptake of the dead, and phages —
+over a deterministic in-process transport, or over real TCP between separate processes.
+It shares this crate's conventions and none of its code. See `hgt/README.md`.
