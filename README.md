@@ -13,12 +13,12 @@ graph says is mutually maintaining itself.
 cargo run --release -- --seed 1 --ticks 5000 --render          # watch it
 cargo run --release -- --seed 1 --ticks 100000 --metrics m.jsonl   # measure it
 ./scripts/sweep.sh                                                # the experiment protocol
-cargo test                                                        # 34 tests
+cargo test                                                        # 42 tests
 ```
 
 Results of the protocol in `results/` (see `results/README.md`); the §8 follow-up
-(template repair, no-self-jump, scarcity) in `results/variants/`. What to do next:
-`docs/continuation-plan.md`.
+(template repair, no-self-jump, scarcity) in `results/variants/`; round 3 (pass-through
+repair, token execution model, probes) in `results/round3/`. Plan: `docs/continuation-plan.md`.
 
 ## Layout
 
@@ -30,13 +30,14 @@ src/
   vm.rs        per-cell interpreter; write-conflict and death rules
   energy.rs    sun gradient (exact fixed-point dithering), diffusion
   noise.rs     mutation with geometric skipping; noise ramp lives in config
+  probe.rs     perturbation probe (restoration of overwritten bytes vs matched background)
   sim.rs       run loop, double buffering, windowed repair log
   metrics.rs   repair-graph SCCs, self-mutual-information, organism tracking, vitality
   snapshot.rs  lossless binary snapshots (grid + repair edges + noise rate)
   render.rs    crossterm renderer (tag / ip / instr modes)
   main.rs      CLI: run, `analyze DIR`, `sweep`
 tests/         isa_roundtrip, energy_conservation, vm_loop, snapshot_files, metrics
-scripts/       sweep.sh (protocol), sweep_variants.sh (§8 follow-up), plot.py (figures + summary.md)
+scripts/       sweep.sh, sweep_variants.sh, sweep_round3.sh, sweep_token.sh (protocols), plot.py
 examples/      ring_trace.rs — print a column of the seeded ring over time
 ```
 
@@ -83,6 +84,16 @@ hand-written *template* structure for the register mode: columns whose rows alte
 `Repair(S)`/`Load(N)`, so each cell restores its south neighbour from its north
 neighbour's byte (an independent copy); with no open edge it is an exact fixed point,
 which copy-self repair cannot express (`tests/variants.rs`).
+
+**Round 3 additions** (`results/round3/`): `repair_source = opposite` (pass-through:
+`Repair(d)` relays the byte opposite to `d`) and `none` (the null twin: costs, writes
+nothing); `exec_model = token` (a cell runs only its own byte while it holds a token that
+moves along the cell's outgoing direction; `reg` travels with it; `MoveIp`/`JmpIfZero`
+redirect one shot; tokens spawn at `token_rate`); pass-through *strips* as a seedable
+structure; a perturbation probe (`--probe-every`) that overwrites core bytes and matched
+background bytes and records restoration after 1, 2 and 5 windows; per-x stability
+histograms for the null-twin baseline. The round's result is that every structure this
+ISA can maintain is a relay belt (see `results/round3/README.md`).
 
 **Write conflicts**: several cells writing one target in a tick → highest energy wins,
 ties → lowest index. **Energy**: transfers are clamped and applied in index order;
