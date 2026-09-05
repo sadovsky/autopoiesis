@@ -39,16 +39,36 @@ pub enum RepairSource {
     None,
 }
 
+/// How cells execute.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecModel {
+    /// A cell's program is its 9-cell neighbourhood; `ip` sweeps it (the first two
+    /// protocols). Every byte is executed by its eight neighbours.
+    Neighbourhood,
+    /// A cell executes only its **own** byte, and only while it holds a *token*. After
+    /// executing, the token moves to the neighbour in the cell's outgoing direction
+    /// (`ip & 7`); `MoveIp(d)` / a taken `JmpIfZero(d)` send it to `d` instead (one
+    /// shot; the wiring is not changed). `reg` travels with the token. Tokens are
+    /// destroyed on collision or on entering a dead cell and spawn spontaneously at
+    /// `token_rate`. Programs are closed paths of cells executed once per lap.
+    Token,
+}
+
 /// Which hand-written template structure `seed_tiling` injects.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TilingPattern {
     /// Rows alternate `Repair(S)` / `Load(N)`; needs `repair_source = register`.
     Register,
-    /// Rows alternate `Repair(S)` / `Repair(N)`; needs `repair_source = opposite`. Each
-    /// cell relays its north neighbour's byte to its south neighbour (or the mirror),
-    /// so every byte is restored from an independent copy two rows away with no
-    /// register in the loop.
+    /// Pass-through strips; needs `repair_source = opposite`. Even rows `Repair(N)`,
+    /// odd rows `Repair(NE)` in even band columns and `Repair(NW)` in odd ones. Every
+    /// cell relays a neighbour's byte into the cell opposite, every cell is restored by
+    /// a cell *other than* the one it writes to (the dependency chain zigzags down a
+    /// 2-column strip, no mutual pairs, so any single junk byte heals within two laps),
+    /// and each 2-column strip closes on itself on the torus, so the band has no open
+    /// edge. Three distinct bytes; no register involved. Under the token model each
+    /// strip is wired as one serpentine loop with one token.
     PassThrough,
 }
 
@@ -230,6 +250,14 @@ pub struct SimConfig {
     pub seed_tiling_width: usize,
     /// Which template structure `seed_tiling` injects. Default register.
     pub seed_tiling_pattern: TilingPattern,
+    /// Execution model. Default neighbourhood (plan §2 as implemented in rounds 1–3).
+    pub exec_model: ExecModel,
+    /// Token model: per tick, a live cell without a token gains one with this
+    /// probability. Default 0.02.
+    pub token_rate: f64,
+    /// Token model: fraction of cells holding a token at t = 0 (random outgoing
+    /// directions). Default 0.05.
+    pub token_init: f64,
     /// Perturbation probe: every this many ticks (a multiple of `analysis_every`; 0 =
     /// off), overwrite `probe_k` random core bytes of up to `probe_max_organisms`
     /// tracked organisms (size ≥ `probe_min_size`) and, for each, one background byte
@@ -285,6 +313,9 @@ impl Default for SimConfig {
             seed_tiling: false,
             seed_tiling_width: 8,
             seed_tiling_pattern: TilingPattern::Register,
+            exec_model: ExecModel::Neighbourhood,
+            token_rate: 0.02,
+            token_init: 0.05,
             probe_every: 0,
             probe_k: 8,
             probe_min_size: 10,
@@ -343,6 +374,11 @@ impl SimConfig {
         if self.seed_ring_width == 0 {
             bail!("seed_ring_width must be > 0");
         }
+        for v in [self.token_rate, self.token_init] {
+            if !(0.0..=1.0).contains(&v) {
+                bail!("token_rate and token_init must lie in [0, 1]");
+            }
+        }
         if self.probe_every > 0 && !self.probe_every.is_multiple_of(self.analysis_every) {
             bail!("probe_every must be a multiple of analysis_every");
         }
@@ -355,6 +391,9 @@ impl SimConfig {
             }
             if !self.height.is_multiple_of(2) {
                 bail!("seed_tiling needs an even height (rows alternate two classes)");
+            }
+            if self.seed_tiling_pattern == TilingPattern::PassThrough && !self.seed_tiling_width.is_multiple_of(2) {
+                bail!("the pass-through tiling is made of 2-column strips: seed_tiling_width must be even");
             }
         }
         Ok(())

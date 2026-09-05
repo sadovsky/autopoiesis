@@ -60,6 +60,10 @@ pub const DIR_ARROWS: [char; 8] = ['↑', '↗', '→', '↘', '↓', '↙', '�
 /// Size of the neighbourhood a cell's `ip` ranges over (self + 8 neighbours).
 pub const NEIGHBORHOOD: u8 = 9;
 
+/// Token model: this bit of `ip` marks a cell that holds a token; `ip & 7` is then the
+/// cell's outgoing direction.
+pub const TOKEN: u8 = 0x80;
+
 pub const N: u8 = 0;
 pub const NE: u8 = 1;
 pub const E: u8 = 2;

@@ -304,6 +304,141 @@ def main():
     plt.close(fig)
     lines.append("")
 
+    # --- Null-twin stability ratio ----------------------------------------------------
+    # If a `null` experiment (repair_source = none) exists in this root, every organism
+    # row's byte stability is divided by the twin's background stability at the same tick
+    # and x band: the proper "maintained vs untouched" baseline.
+    if "null" in data and data["null"][0]:
+        twin = defaultdict(list)
+        for r in data["null"][0]:
+            if r.get("stability_x_hist"):
+                twin[r["tick"]].append(r["stability_x_hist"])
+        twin = {t: np.mean(np.array(v), axis=0) for t, v in twin.items()}
+        nb = len(next(iter(twin.values())))
+        lines += ["## Null-twin stability ratio (organism stability / repair-disabled world at same tick and x band)", "",
+                  "| experiment | organism-frames | median ratio | frac ratio > 3 | rows with ratio > 3 and size >= 10 | rows with ratio > 3 and size >= 100 |",
+                  "|---|---|---|---|---|---|"]
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+        for name, (frames, _, _) in data.items():
+            if name == "null":
+                continue
+            w = grid_width(exps[name], width_default)
+            ratios, big10, big100 = [], 0, 0
+            for r in frames:
+                base = twin.get(r["tick"])
+                if base is None:
+                    continue
+                for o in r["organisms"]:
+                    if o["mi_samples"] == 0:
+                        continue
+                    xb = min(int(o["cx"] / w * nb), nb - 1)
+                    ratio = (o["stability"] + 0.02) / (base[xb] + 0.02)
+                    ratios.append(ratio)
+                    if ratio > 3 and o["core_size"] >= 10:
+                        big10 += 1
+                    if ratio > 3 and o["core_size"] >= 100:
+                        big100 += 1
+            if ratios:
+                ratios = np.array(ratios)
+                ax.hist(ratios, bins=60, range=(0, 6), histtype="step", density=True, label=f"{name} (n={len(ratios)})")
+                lines.append(f"| {name} | {len(ratios)} | {np.median(ratios):.2f} | {np.mean(ratios > 3):.3f} | {big10} | {big100} |")
+        ax.axvline(3, color="k", ls=":", lw=0.8)
+        ax.set_xlabel("stability ratio vs null twin")
+        ax.set_ylabel("density over reported organism rows")
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        fig.savefig(os.path.join(out, "null_ratio_hist.png"), dpi=120)
+        plt.close(fig)
+        lines.append("")
+
+    # --- Perturbation probes -----------------------------------------------------------
+    probes = {}
+    for name, d in exps.items():
+        recs = []
+        for path in sorted(glob.glob(os.path.join(d, "seed_*.jsonl"))):
+            with open(path) as f:
+                for line in f:
+                    if line.startswith('{"kind":"probe"'):
+                        recs.append(json.loads(line))
+        if recs:
+            probes[name] = recs
+    if probes:
+        lines += ["## Perturbation probes (fraction of overwritten bytes restored; organism vs matched background)", "",
+                  "| experiment | probes | size class | n | restored 1w | 2w | 5w | background 1w | 2w | 5w |", "|---|---|---|---|---|---|---|---|---|---|"]
+        fig, ax = plt.subplots(figsize=(9, 4.5))
+        xs_lbl = []
+        for k, (name, recs) in enumerate(probes.items()):
+            for cls, lo, hi in [("<10", 0, 10), ("10-99", 10, 100), (">=100", 100, 10**9)]:
+                sel = [r for r in recs if lo <= r["core_size"] < hi]
+                if not sel:
+                    continue
+                res = np.array([r["restored"] for r in sel])
+                bg = np.array([r["bg_restored"] for r in sel if r["bg_k"] > 0])
+                bgm = np.nanmean(bg, axis=0) if len(bg) else [float("nan")] * 3
+                lines.append(f"| {name} | {len(recs)} | {cls} | {len(sel)} | {res[:,0].mean():.3f} | {res[:,1].mean():.3f} | {res[:,2].mean():.3f} | "
+                             f"{bgm[0]:.3f} | {bgm[1]:.3f} | {bgm[2]:.3f} |")
+                if cls == ">=100" or (cls == "10-99" and not any(r["core_size"] >= 100 for r in recs)):
+                    xs_lbl.append(f"{name}\n{cls}")
+                    i = len(xs_lbl) - 1
+                    ax.bar(i - 0.2, res[:, 0].mean(), 0.4, color="C0", label="organism, 1 window" if i == 0 else None)
+                    ax.bar(i + 0.2, bgm[0], 0.4, color="C7", label="matched background" if i == 0 else None)
+        ax.set_xticks(range(len(xs_lbl)))
+        ax.set_xticklabels(xs_lbl, fontsize=8)
+        ax.set_ylabel("fraction restored after one window")
+        ax.set_ylim(0, 1)
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        fig.savefig(os.path.join(out, "probe_restoration.png"), dpi=120)
+        plt.close(fig)
+        lines.append("")
+
+    # --- Half-life of seeded structures at fixed noise (experiments named hl_<tag>_<noise>)
+    hl = defaultdict(list)
+    for name, (frames, _, _) in data.items():
+        if not name.startswith("hl_") or not frames:
+            continue
+        tag = name.split("_")[1]
+        try:
+            with open(os.path.join(exps[name], "config.json")) as f:
+                cfgj = json.load(f)
+            noise = cfgj["noise_rate"]
+            height = cfgj["height"]
+        except (OSError, KeyError, ValueError):
+            continue
+        # loops alive = organisms with a column-sized core (>= 0.9 * height)
+        by_tick = defaultdict(list)
+        for r in frames:
+            by_tick[r["tick"]].append(sum(1 for s_ in r["sizes"] if s_ >= 0.9 * height))
+        ticks = sorted(by_tick)
+        alive = np.array([np.mean(by_tick[t]) for t in ticks])
+        if alive.max() <= 0:
+            hl[tag].append((noise, float("nan"), 0.0))
+            continue
+        half = alive[0] / 2 if alive[0] > 0 else alive.max() / 2
+        t_half = next((t for t, a in zip(ticks, alive) if a <= half and t > 0), None)
+        hl[tag].append((noise, t_half if t_half is not None else float("inf"), alive[0]))
+    if hl:
+        lines += ["## Half-life of the seeded structure vs noise (ticks until half the column loops are gone)", "",
+                  "| structure | noise | loops at t=0 | half-life (ticks) |", "|---|---|---|---|"]
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        for tag, rows in hl.items():
+            rows.sort()
+            for noise, th, a0 in rows:
+                lines.append(f"| {tag} | {noise:g} | {a0:.1f} | {th if th != float('inf') else '> run'} |")
+            xs = [n for n, th, _ in rows if np.isfinite(th) and th > 0]
+            ys = [th for n, th, _ in rows if np.isfinite(th) and th > 0]
+            if xs:
+                ax.plot(xs, ys, "o-", label=tag)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("noise rate")
+        ax.set_ylabel("half-life (ticks)")
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        fig.savefig(os.path.join(out, "halflife_vs_noise.png"), dpi=120)
+        plt.close(fig)
+        lines.append("")
+
     # --- Run summaries ------------------------------------------------------------
     lines += ["## Run totals (mean per seed)", "", "| experiment | executed | repairs | deaths | starved | mutations | elapsed s |",
               "|---|---|---|---|---|---|---|"]

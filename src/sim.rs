@@ -1,6 +1,8 @@
 //! The run loop: double-buffered grid, VM step, noise, energy, repair log.
 
-use crate::config::{SimConfig, TilingPattern};
+use crate::config::{ExecModel, SimConfig, TilingPattern};
+use crate::grid::TOKEN;
+use rand::RngExt;
 use crate::energy::{self, SunField};
 use crate::grid::{Grid, Topology};
 use crate::isa::Instruction;
@@ -82,6 +84,7 @@ impl RepairLog {
 /// Cumulative counters over a run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RunStats {
+    pub tokens_lost: u64,
     pub executed: u64,
     pub deaths: u64,
     pub starved: u64,
@@ -93,6 +96,7 @@ pub struct RunStats {
 
 impl RunStats {
     fn add(&mut self, s: StepStats) {
+        self.tokens_lost += s.tokens_lost;
         self.executed += s.executed;
         self.deaths += s.deaths;
         self.starved += s.starved;
@@ -123,6 +127,14 @@ impl Sim {
         cfg.validate()?;
         let mut rng = Rng::seed_from_u64(seed);
         let mut grid = Grid::random(cfg.width, cfg.height, cfg.init_energy_max, &mut rng);
+        if cfg.exec_model == ExecModel::Token {
+            for c in &mut grid.cells {
+                c.ip = rng.random::<u8>() & 7;
+                if rng.random::<f64>() < cfg.token_init {
+                    c.ip |= TOKEN;
+                }
+            }
+        }
         if cfg.seed_ring {
             inject_ring(&cfg, &mut grid);
         }
@@ -248,20 +260,49 @@ pub fn inject_tiling(cfg: &SimConfig, grid: &mut Grid) {
         Some(x) => x,
         None => energy::brightest_column(cfg).saturating_sub(w / 2).min(cfg.width - w),
     };
-    let a = Instruction::Repair(crate::grid::S).encode();
-    let b = match cfg.seed_tiling_pattern {
-        TilingPattern::Register => Instruction::Load(crate::grid::N).encode(),
-        TilingPattern::PassThrough => Instruction::Repair(crate::grid::N).encode(),
-    };
+    use crate::grid::{E, N, NE, NW, S, W};
+    let h = cfg.height;
     for dx in 0..w {
         let x = (x0 + dx) % cfg.width;
-        for y in 0..cfg.height {
+        for y in 0..h {
             let c = grid.get_mut(x as i64, y as i64);
-            let (instr, reg) = if y % 2 == 0 { (a, b) } else { (b, a) };
+            let (instr, reg, dir) = match cfg.seed_tiling_pattern {
+                // Column loops: Repair(S) / Load(N) rows; registers pre-loaded with the
+                // other class's byte; token runs down each column.
+                TilingPattern::Register => {
+                    let a = Instruction::Repair(S).encode();
+                    let b = Instruction::Load(N).encode();
+                    let (i, r) = if y % 2 == 0 { (a, b) } else { (b, a) };
+                    (i, r, S | if y == 0 { TOKEN } else { 0 })
+                }
+                // Strips: see `TilingPattern::PassThrough`. Token serpentine per strip:
+                // down the even column, east at the bottom, up the odd column, west at
+                // the top; one token at the top of each even column.
+                TilingPattern::PassThrough => {
+                    let i = if y % 2 == 0 {
+                        Instruction::Repair(N).encode()
+                    } else if dx % 2 == 0 {
+                        Instruction::Repair(NE).encode()
+                    } else {
+                        Instruction::Repair(NW).encode()
+                    };
+                    let dir = match (dx % 2 == 0, y) {
+                        (true, y) if y == h - 1 => E,
+                        (true, 0) => S | TOKEN,
+                        (true, _) => S,
+                        (false, 0) => W,
+                        (false, _) => N,
+                    };
+                    (i, 0, dir)
+                }
+            };
             c.instr = instr;
             c.reg = reg;
             c.tag = 2;
-            c.ip = 0;
+            c.ip = match cfg.exec_model {
+                ExecModel::Neighbourhood => 0,
+                ExecModel::Token => dir,
+            };
             c.energy = cfg.energy_cap / 2;
         }
     }

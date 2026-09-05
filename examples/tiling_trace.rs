@@ -1,6 +1,6 @@
 //! How much of the seeded template-repairing tiling is intact over time, under a given
 //! repair_source, noise and sun. Usage: tiling_trace <copy_self|register|previous> <noise> <sun> [seed]
-use autopoiesis::config::{RepairSource, SimConfig, SunProfile, TilingPattern};
+use autopoiesis::config::{RepairSource, SimConfig, SunProfile};
 use autopoiesis::sim::Sim;
 
 fn main() {

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use autopoiesis::config::{NoiseRamp, RepairSource, SimConfig, SunProfile, TilingPattern};
+use autopoiesis::config::{ExecModel, NoiseRamp, RepairSource, SimConfig, SunProfile, TilingPattern};
 use autopoiesis::probe::Prober;
 use autopoiesis::metrics::Analyzer;
 use autopoiesis::render::{Renderer, ShowMode};
@@ -81,6 +81,16 @@ struct RunArgs {
     /// Which template structure --seed-tiling injects.
     #[arg(long, value_enum)]
     seed_tiling_pattern: Option<TilingPatternArg>,
+    /// Execution model: neighbourhood (a cell runs its 9-cell neighbourhood) or token
+    /// (a cell runs its own byte while it holds a moving token).
+    #[arg(long, value_enum)]
+    exec_model: Option<ExecModelArg>,
+    /// Token model: spontaneous token rate per empty live cell per tick.
+    #[arg(long)]
+    token_rate: Option<f64>,
+    /// Token model: fraction of cells holding a token at t = 0.
+    #[arg(long)]
+    token_init: Option<f64>,
     /// Perturbation probe every N ticks (0 = off); see SimConfig::probe_every.
     #[arg(long)]
     probe_every: Option<u32>,
@@ -138,6 +148,12 @@ enum SunProfileArg {
     Linear,
     Gaussian,
     Uniform,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ExecModelArg {
+    Neighbourhood,
+    Token,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -234,6 +250,18 @@ fn build_config(a: &RunArgs) -> Result<SimConfig> {
             TilingPatternArg::Register => TilingPattern::Register,
             TilingPatternArg::PassThrough => TilingPattern::PassThrough,
         };
+    }
+    if let Some(m) = a.exec_model {
+        cfg.exec_model = match m {
+            ExecModelArg::Neighbourhood => ExecModel::Neighbourhood,
+            ExecModelArg::Token => ExecModel::Token,
+        };
+    }
+    if let Some(r) = a.token_rate {
+        cfg.token_rate = r;
+    }
+    if let Some(r) = a.token_init {
+        cfg.token_init = r;
     }
     if let Some(p) = a.probe_every {
         cfg.probe_every = p;

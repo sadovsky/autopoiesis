@@ -646,8 +646,8 @@ impl Analyzer {
         };
         let stability_x_hist = {
             let w = grid.width.max(1);
-            let mut same = vec![0u64; CORE_X_BINS];
-            let mut tot = vec![0u64; CORE_X_BINS];
+            let mut same = [0u64; CORE_X_BINS];
+            let mut tot = [0u64; CORE_X_BINS];
             for &(past, now) in &pairs {
                 for i in 0..n {
                     let b = (i % w) * CORE_X_BINS / w;
