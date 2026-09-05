@@ -163,9 +163,25 @@ soup) or a frozen one (register, where an overwritten byte is simply never touch
 again — and then it is not "restored" either, it stays overwritten). The probe is the
 direct operationalisation of the plan's definition, and it reads zero for all of them.
 
-**Half-lives** (`hl_*`): re-measured with `seed_intact` (fraction of the injected
-bytes still in place); table in `plots/summary.md` and `plots/halflife_vs_noise.png`.
-*(filled in after the re-run.)*
+**Half-lives** (`hl_*`, `seed_intact` = fraction of the injected bytes still in place,
+mean of 10 seeds; 8-column band at the bright edge of the gradient, so the band has open
+edges; `plots/halflife_vs_noise.png`):
+
+| noise | register band (neighbourhood) | pass-through band (neighbourhood) | pass-through strips (token) |
+|---|---|---|---|
+| 10⁻⁴ | 800 ticks (7 % intact at 20k) | 100 (4 %) | 100 (1 %) |
+| 3 × 10⁻⁴ | 800 (3 %) | 100 (1 %) | 100 (0.4 %) |
+| 10⁻³ | 400 (2 %) | 100 (1 %) | 100 (0.3 %) |
+| 3 × 10⁻³ | 200 (1 %) | 100 (1 %) | 100 (0.3 %) |
+| 10⁻² | 100 (0.5 %) | 100 (2 %) | 100 (0.5 %) |
+
+The register band is the only one whose lifetime depends on noise at all (800 → 100
+ticks over two decades), and even at 10⁻⁴ it is half gone in 800 ticks — the round-2
+vitality of 1.5 × 10⁻⁴ restated as a decay curve. Both pass-through bands lose half
+their bytes within the first 100 ticks at every noise level: their relays read from the
+column beyond the band's edge, so the band is a conveyor fed by background, and noise is
+irrelevant. The closed versions (`hlc_*`, full width at uniform sun, below) remove the
+edge and measure the belts' own response to noise.
 
 
 ### Phase B — the token execution model (`tok_*`, `hl_tok_*`, `hlc_tok_*`, `probe_tok*`)
