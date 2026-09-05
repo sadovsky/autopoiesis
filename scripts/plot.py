@@ -393,6 +393,8 @@ def main():
         lines.append("")
 
     # --- Half-life of seeded structures at fixed noise (experiments named hl_<tag>_<noise>)
+    # Uses the frame field seed_intact: the fraction of the injected structure's bytes
+    # still equal to what was seeded (mean over seeds).
     hl = defaultdict(list)
     for name, (frames, _, _) in data.items():
         if not name.startswith("hl_") or not frames:
@@ -400,39 +402,36 @@ def main():
         tag = name.split("_")[1]
         try:
             with open(os.path.join(exps[name], "config.json")) as f:
-                cfgj = json.load(f)
-            noise = cfgj["noise_rate"]
-            height = cfgj["height"]
+                noise = json.load(f)["noise_rate"]
         except (OSError, KeyError, ValueError):
             continue
-        # loops alive = organisms with a column-sized core (>= 0.9 * height)
         by_tick = defaultdict(list)
         for r in frames:
-            by_tick[r["tick"]].append(sum(1 for s_ in r["sizes"] if s_ >= 0.9 * height))
-        ticks = sorted(by_tick)
-        alive = np.array([np.mean(by_tick[t]) for t in ticks])
-        if alive.max() <= 0:
-            hl[tag].append((noise, float("nan"), 0.0))
+            v = r.get("seed_intact")
+            if v is not None and v == v:  # not NaN
+                by_tick[r["tick"]].append(v)
+        if not by_tick:
             continue
-        half = alive[0] / 2 if alive[0] > 0 else alive.max() / 2
-        t_half = next((t for t, a in zip(ticks, alive) if a <= half and t > 0), None)
-        hl[tag].append((noise, t_half if t_half is not None else float("inf"), alive[0]))
+        ticks = sorted(by_tick)
+        intact = np.array([np.mean(by_tick[t]) for t in ticks])
+        t_half = next((t for t, v in zip(ticks, intact) if v <= 0.5), None)
+        hl[tag].append((noise, t_half if t_half is not None else float("inf"), intact[-1], ticks[-1]))
     if hl:
-        lines += ["## Half-life of the seeded structure vs noise (ticks until half the column loops are gone)", "",
-                  "| structure | noise | loops at t=0 | half-life (ticks) |", "|---|---|---|---|"]
+        lines += ["## Half-life of the seeded structure vs noise (ticks until half of its bytes differ from the seed)", "",
+                  "| structure | noise | half-life (ticks) | intact at end of run |", "|---|---|---|---|"]
         fig, ax = plt.subplots(figsize=(7, 4.5))
         for tag, rows in hl.items():
             rows.sort()
-            for noise, th, a0 in rows:
-                lines.append(f"| {tag} | {noise:g} | {a0:.1f} | {th if th != float('inf') else '> run'} |")
-            xs = [n for n, th, _ in rows if np.isfinite(th) and th > 0]
-            ys = [th for n, th, _ in rows if np.isfinite(th) and th > 0]
+            for noise, th, end_v, t_end in rows:
+                lines.append(f"| {tag} | {noise:g} | {th if th != float('inf') else f'> {t_end}'} | {end_v:.3f} |")
+            xs = [n for n, th, _, _ in rows if np.isfinite(th) and th > 0]
+            ys = [th for n, th, _, _ in rows if np.isfinite(th) and th > 0]
             if xs:
                 ax.plot(xs, ys, "o-", label=tag)
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel("noise rate")
-        ax.set_ylabel("half-life (ticks)")
+        ax.set_ylabel("half-life of the seeded bytes (ticks)")
         ax.legend(fontsize=8)
         fig.tight_layout()
         fig.savefig(os.path.join(out, "halflife_vs_noise.png"), dpi=120)

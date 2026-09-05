@@ -119,6 +119,8 @@ pub struct Sim {
     pub repair_log: RepairLog,
     pub stats: RunStats,
     pub last_step: StepStats,
+    /// `(cell, injected byte)` of the seeded structure, for `seed_intact`.
+    seed_reference: Option<Vec<(u32, u8)>>,
 }
 
 impl Sim {
@@ -138,10 +140,32 @@ impl Sim {
         if cfg.seed_ring {
             inject_ring(&cfg, &mut grid);
         }
+        let mut seed_reference = None;
         if cfg.seed_tiling {
             inject_tiling(&cfg, &mut grid);
+            let cells: Vec<(u32, u8)> = grid
+                .cells
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.tag == 2)
+                .map(|(i, c)| (i as u32, c.instr))
+                .collect();
+            seed_reference = Some(cells);
         }
-        Sim::from_grid(cfg, seed, grid, rng)
+        let mut sim = Sim::from_grid(cfg, seed, grid, rng)?;
+        sim.seed_reference = seed_reference;
+        Ok(sim)
+    }
+
+    /// Fraction of the seeded structure's bytes still equal to what was injected
+    /// (`None` when nothing was seeded).
+    pub fn seed_intact(&self) -> Option<f64> {
+        let r = self.seed_reference.as_ref()?;
+        if r.is_empty() {
+            return None;
+        }
+        let same = r.iter().filter(|&&(i, b)| self.cur.cells[i as usize].instr == b).count();
+        Some(same as f64 / r.len() as f64)
     }
 
     /// Start from an explicit grid (used by tests and experiments).
@@ -171,6 +195,7 @@ impl Sim {
             repair_log: RepairLog::new(cfg.window, n),
             stats: RunStats::default(),
             last_step: StepStats::default(),
+            seed_reference: None,
             rng,
             seed,
             tick: 0,

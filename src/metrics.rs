@@ -494,6 +494,9 @@ pub struct FrameRecord {
     /// all cells, not just the background). In a `repair_source = none` run this is
     /// the null-twin baseline for stability at each energy niche.
     pub stability_x_hist: Vec<f64>,
+    /// Fraction of a seeded structure's bytes still intact (NaN when nothing was
+    /// seeded); filled in by the run loop, which is the only thing that knows the seed.
+    pub seed_intact: f64,
     pub repair_edges: usize,
     pub organisms: Vec<OrganismRow>,
 }
@@ -846,6 +849,7 @@ impl Analyzer {
                 background_stability,
                 core_x_hist,
                 stability_x_hist,
+                seed_intact: f64::NAN,
                 repair_edges: edges.len(),
                 organisms: rows,
             },

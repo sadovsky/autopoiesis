@@ -370,7 +370,8 @@ fn run_one(cfg: &SimConfig, a: &RunArgs, metrics: Option<&mut Jsonl>, quiet: boo
             if want_analysis
                 && let (Some(an), Some(sink)) = (&mut analyzer, metrics.as_deref_mut())
             {
-                let rep = an.observe(t, sim.noise_rate(), &sim.cur, &edges);
+                let mut rep = an.observe(t, sim.noise_rate(), &sim.cur, &edges);
+                rep.frame.seed_intact = sim.seed_intact().unwrap_or(f64::NAN);
                 if t % cfg.report_every == 0 {
                     sink.write(&rep.frame.trimmed(cfg.report_top))?;
                 }
