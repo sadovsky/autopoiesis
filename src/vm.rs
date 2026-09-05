@@ -25,10 +25,13 @@
 //!   in cell-index order, clamped to what the source currently holds and to the cap on
 //!   the receiver. Energy is never created; clamping at the cap destroys it.
 //!
-//! A cell whose energy is 0 at the start of a tick does not execute: its `instr` is
-//! replaced by a random byte and its `tag`/`ip` reset (death = decoherence). A cell
-//! that cannot afford its instruction burns what it has (energy → 0) and dies next
-//! tick.
+//! **Death.** A cell that cannot afford its instruction burns what it has (energy → 0).
+//! After every cell has run, and *before* this tick's energy injection, any cell at 0
+//! energy — starved, or drained by an `Absorb` — decoheres: its `instr` is replaced by
+//! a random byte and its `tag`/`ip` reset. Pending instruction writes are applied after
+//! that, so repairing into a dead cell colonises it (this is how a pattern grows into
+//! empty space). A cell that still has 0 energy at the start of a tick (no sun) simply
+//! does not execute.
 
 use crate::config::SimConfig;
 use crate::grid::{Cell, Grid, NEIGHBORHOOD, Topology};
@@ -89,12 +92,7 @@ impl Vm {
         for i in 0..n {
             let c: Cell = cur.cells[i];
             if c.energy == 0 {
-                // Death: decoherence into a random byte.
-                let nc = &mut next.cells[i];
-                nc.instr = rng.random::<u8>();
-                nc.tag = 0;
-                nc.ip = 0;
-                stats.deaths += 1;
+                // Already dead (decohered at the end of the tick it died); nothing to run.
                 continue;
             }
             let ip = c.ip % NEIGHBORHOOD;
@@ -154,6 +152,16 @@ impl Vm {
                 }
             }
             next.cells[i].ip = new_ip;
+        }
+
+        // Death: anything at 0 energy now decoheres into a random byte.
+        for (i, nc) in next.cells.iter_mut().enumerate() {
+            if nc.energy == 0 && cur.cells[i].energy != 0 {
+                nc.instr = rng.random::<u8>();
+                nc.tag = 0;
+                nc.ip = 0;
+                stats.deaths += 1;
+            }
         }
 
         for (t, slot) in self.slots.iter().enumerate() {
