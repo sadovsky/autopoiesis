@@ -1,5 +1,15 @@
 # Continuation plan
 
+> **Status (after round 3):** phases A, B and C were run; see `results/round3/README.md`.
+> A failed its gate (pass-through repair is a bigger soup). B was implemented and reached
+> its "stop and rethink the ISA" branch: the token model removes code/data coupling and
+> leaves an empty repair graph, and every structure this ISA can maintain turns out to be
+> a single-source relay belt, not a repair loop. C's instruments (probe, null twin,
+> half-life) work and all read "no active maintenance anywhere". D was not started. The
+> next design question is a write discipline (accumulator `Cmp`, vote-gated `Repair`, no
+> unguarded `Store`), argued at the end of the round-3 write-up.
+
+
 Where the two protocols leave us, and what to do next. Each phase ends with a runnable
 experiment, a number, and a decision gate. Work the phases in order unless a gate says
 to skip.
