@@ -102,9 +102,9 @@ def main():
     # --- Per-experiment summary table ---------------------------------------------
     lines += [
         "| experiment | seeds | frames | mean SCCs/frame | mean core cells | max SCC | "
-        "organisms tracked | frac frames maxP>3 | organisms with maxP>3 | "
-        "mean parasites/frame | mean bg stability |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "organisms created (total) | organisms lived >= 1 window | frac frames maxP>3 | mean persistent SCCs/frame | "
+        "mean persistent cells/frame | long-lived organisms with maxP>3 | mean parasites/frame | mean bg stability |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for name, (frames, lives, summaries) in data.items():
         if not frames:
@@ -113,10 +113,13 @@ def main():
         max_scc = max((max(r["sizes"]) if r["sizes"] else 0) for r in frames)
         frac_p = np.mean([r["max_persistence"] > PERSISTENT for r in frames])
         n_p = sum(1 for l in lives if l["max_persistence"] > PERSISTENT)
+        created = sum(s_["organisms_seen"] for s_ in summaries)
         lines.append(
             f"| {name} | {n_seeds} | {len(frames)} | {np.mean([r['n_organisms'] for r in frames]):.1f} | "
-            f"{np.mean([r['core_cells'] for r in frames]):.0f} | {max_scc} | {len(lives)} | "
-            f"{frac_p:.3f} | {n_p} | {np.mean([r['parasite_cells'] for r in frames]):.1f} | "
+            f"{np.mean([r['core_cells'] for r in frames]):.0f} | {max_scc} | {created} | {len(lives)} | "
+            f"{frac_p:.3f} | {np.mean([r.get('n_persistent', 0) for r in frames]):.2f} | "
+            f"{np.mean([r.get('persistent_cells', 0) for r in frames]):.1f} | {n_p} | "
+            f"{np.mean([r['parasite_cells'] for r in frames]):.1f} | "
             f"{np.mean([r['background_stability'] for r in frames]):.2f} |"
         )
     lines.append("")
@@ -124,12 +127,15 @@ def main():
     # --- Persistence distribution over organism-frames ----------------------------
     fig, ax = plt.subplots(figsize=(8, 4.5))
     for name, (frames, _, _) in data.items():
-        ps = [o["persistence"] for r in frames for o in r["organisms"] if o["mi_samples"] > 0]
-        if ps:
-            ax.hist(ps, bins=60, range=(0, 12), histtype="step", density=True, label=f"{name} (n={len(ps)})")
+        hists = [r["persistence_hist"] for r in frames if r.get("persistence_hist")]
+        if hists:
+            h = np.sum(np.array(hists, dtype=float), axis=0)
+            edges = np.arange(len(h) + 1)
+            ax.stairs(h / max(h.sum(), 1), edges, label=f"{name} (n={int(h.sum())} organism-frames)")
     ax.axvline(PERSISTENT, color="k", ls=":", lw=0.8)
-    ax.set_xlabel("persistence = (MI_region + floor) / (MI_background + floor)")
-    ax.set_ylabel("density over organism-frames")
+    ax.set_yscale("log")
+    ax.set_xlabel("persistence = (MI_region + floor) / (MI_background + floor); last bin open")
+    ax.set_ylabel("fraction of organism-frames (all organisms)")
     ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(os.path.join(out, "persistence_hist.png"), dpi=120)
@@ -146,6 +152,7 @@ def main():
     ax.axhline(PERSISTENT, color="k", ls=":", lw=0.8)
     ax.set_xlabel("SCC core size (cells)")
     ax.set_ylabel("persistence")
+    ax.set_title("reported rows only: per frame, top-10 by size and top-10 by persistence", fontsize=9)
     ax.legend(fontsize=8, markerscale=4)
     fig.tight_layout()
     fig.savefig(os.path.join(out, "persistence_vs_size.png"), dpi=120)
@@ -235,13 +242,14 @@ def main():
 
     # --- Lifetimes ----------------------------------------------------------------
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    lines += ["## Lifetimes", "", "| experiment | organisms | median lifetime (ticks) | p90 | max | still alive at end | max size ever |",
+    lines += ["## Lifetimes (organisms that lived >= report_min_life = one window)", "",
+              "| experiment | organisms | median lifetime (ticks) | p90 | max | still alive at end | max size ever |",
               "|---|---|---|---|---|---|---|"]
     for name, (frames, lives, summaries) in data.items():
         if not lives:
             continue
         end = max(r["tick"] for r in frames) if frames else 0
-        lt = np.array([(l["died"] if l["died"] is not None else end) - l["born"] for l in lives], dtype=float)
+        lt = np.array([l.get("lifetime", (l["died"] if l["died"] is not None else end) - l["born"]) for l in lives], dtype=float)
         ax.hist(lt, bins=np.logspace(1, np.log10(max(lt.max(), 20)), 40), histtype="step", label=name)
         alive = sum(1 for l in lives if l["died"] is None)
         lines.append(

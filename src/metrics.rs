@@ -480,6 +480,12 @@ pub struct FrameRecord {
     pub parasite_cells: usize,
     pub sizes: Vec<usize>,
     pub max_persistence: f64,
+    /// Organisms with persistence above `persistent_threshold`, and their core cells.
+    pub n_persistent: usize,
+    pub persistent_cells: usize,
+    /// Histogram of organism persistence: `PERSISTENCE_BINS` unit-width bins from 0,
+    /// the last bin open-ended.
+    pub persistence_hist: Vec<u32>,
     /// Fraction of all cells whose byte is unchanged over the lag (0 if no lag frame yet).
     pub background_stability: f64,
     /// Number of SCC-core cells per column band: `CORE_X_BINS` equal bins across x.
@@ -490,6 +496,38 @@ pub struct FrameRecord {
 
 /// Number of x bins in `FrameRecord::core_x_hist`.
 pub const CORE_X_BINS: usize = 16;
+/// Number of bins in `FrameRecord::persistence_hist`.
+pub const PERSISTENCE_BINS: usize = 12;
+
+impl FrameRecord {
+    /// Copy with organism rows limited to the union of the top `top` by core size and
+    /// the top `top` by persistence (aggregates untouched).
+    pub fn trimmed(&self, top: usize) -> FrameRecord {
+        let mut keep = vec![false; self.organisms.len()];
+        let mut by_size: Vec<usize> = (0..self.organisms.len()).collect();
+        by_size.sort_by(|&a, &b| self.organisms[b].core_size.cmp(&self.organisms[a].core_size));
+        let mut by_p: Vec<usize> = (0..self.organisms.len()).collect();
+        by_p.sort_by(|&a, &b| {
+            self.organisms[b]
+                .persistence
+                .partial_cmp(&self.organisms[a].persistence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for &i in by_size.iter().take(top).chain(by_p.iter().take(top)) {
+            keep[i] = true;
+        }
+        FrameRecord {
+            organisms: self
+                .organisms
+                .iter()
+                .zip(&keep)
+                .filter(|&(_, &k)| k)
+                .map(|(o, _)| o.clone())
+                .collect(),
+            ..self.clone()
+        }
+    }
+}
 
 /// Lifetime record, emitted when an organism dies or when the run ends.
 #[derive(Clone, Debug, Serialize)]
@@ -500,6 +538,10 @@ pub struct LifeRecord {
     pub born: u32,
     /// `None` if still alive when the run ended.
     pub died: Option<u32>,
+    /// Last frame in which it was matched.
+    pub last_seen: u32,
+    /// `died.unwrap_or(last_seen) - born`.
+    pub lifetime: u32,
     pub max_size: usize,
     /// Noise rate in force when the SCC dissolved; `None` if it survived.
     pub vitality: Option<f64>,
@@ -560,6 +602,11 @@ impl Analyzer {
         self.tracked.len()
     }
 
+    /// Total number of organisms ever assigned an id.
+    pub fn organisms_created(&self) -> u64 {
+        self.next_id
+    }
+
     pub fn observe(&mut self, tick: u32, noise_rate: f64, grid: &Grid, edges: &[(u32, u32)]) -> FrameReport {
         if let Some(prev) = self.last_tick {
             assert!(tick > prev, "frames must be observed in increasing tick order");
@@ -617,6 +664,8 @@ impl Analyzer {
         let mut rows = Vec::with_capacity(organisms.len());
         let mut sizes = Vec::with_capacity(organisms.len());
         let mut core_x_hist = vec![0u32; CORE_X_BINS];
+        let mut persistence_hist = vec![0u32; PERSISTENCE_BINS];
+        let (mut n_persistent, mut persistent_cells) = (0usize, 0usize);
         let width = grid.width.max(1);
         let mut core_cells = 0;
         let mut parasite_cells = 0;
@@ -653,6 +702,11 @@ impl Analyzer {
             };
             let persistence = if pairs.is_empty() { 0.0 } else { persistence_ratio(est.mi, mi_rand, self.cfg.mi_floor) };
             max_persistence = max_persistence.max(persistence);
+            persistence_hist[(persistence.max(0.0).floor() as usize).min(PERSISTENCE_BINS - 1)] += 1;
+            if persistence > self.cfg.persistent_threshold {
+                n_persistent += 1;
+                persistent_cells += org.core.len();
+            }
 
             let ti = match org_to_tracked[oi] {
                 Some(ti) => {
@@ -732,6 +786,8 @@ impl Analyzer {
                     organism_id: tr.id,
                     born: tr.born,
                     died: Some(t_miss),
+                    last_seen: tr.last_seen,
+                    lifetime: t_miss - tr.born,
                     max_size: tr.max_size,
                     vitality: Some(noise_at),
                     max_persistence: tr.max_persistence,
@@ -754,6 +810,9 @@ impl Analyzer {
                 parasite_cells,
                 sizes,
                 max_persistence,
+                n_persistent,
+                persistent_cells,
+                persistence_hist,
                 background_stability,
                 core_x_hist,
                 repair_edges: edges.len(),
@@ -777,6 +836,8 @@ impl Analyzer {
                     organism_id: tr.id,
                     born: tr.born,
                     died: Some(t_miss),
+                    last_seen: tr.last_seen,
+                    lifetime: t_miss - tr.born,
                     max_size: tr.max_size,
                     vitality: Some(noise_at),
                     max_persistence: tr.max_persistence,
@@ -787,6 +848,8 @@ impl Analyzer {
                     organism_id: tr.id,
                     born: tr.born,
                     died: None,
+                    last_seen: tr.last_seen,
+                    lifetime: tr.last_seen - tr.born,
                     max_size: tr.max_size,
                     vitality: None,
                     max_persistence: tr.max_persistence,

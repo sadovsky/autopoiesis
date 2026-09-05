@@ -158,6 +158,19 @@ pub struct SimConfig {
     /// Interval in ticks between online metric frames (repair-graph SCCs, MI, organism
     /// tracking). Several frames per `window` let MI samples pool. Default 20.
     pub analysis_every: u32,
+    /// Emit a frame record every this many ticks (a multiple of `analysis_every`;
+    /// analysis itself still runs every `analysis_every`). Default 100.
+    pub report_every: u32,
+    /// Per-frame organism rows are limited to the union of the top N by core size and
+    /// the top N by persistence; frame aggregates always cover every organism.
+    /// Default 10.
+    pub report_top: usize,
+    /// Life records are emitted only for organisms that lived at least this many
+    /// ticks; frame-level counts include everything. Default 100.
+    pub report_min_life: u32,
+    /// Persistence above which an organism counts as persistent in frame aggregates.
+    /// Default 3.0.
+    pub persistent_threshold: f64,
     /// Inject a hand-written repairing ring (a torus-spanning column of `Repair(S)`)
     /// at t = 0. Default false.
     pub seed_ring: bool,
@@ -195,6 +208,10 @@ impl Default for SimConfig {
             mi_floor: 0.05,
             snapshot_every: 100,
             analysis_every: 20,
+            report_every: 100,
+            report_top: 10,
+            report_min_life: 100,
+            persistent_threshold: 3.0,
             seed_ring: false,
             seed_ring_x: None,
             seed_ring_width: 1,
@@ -237,8 +254,11 @@ impl SimConfig {
         if self.sun < 0.0 || !self.sun.is_finite() {
             bail!("sun must be finite and >= 0");
         }
-        if self.snapshot_every == 0 || self.analysis_every == 0 {
-            bail!("snapshot_every and analysis_every must be > 0");
+        if self.snapshot_every == 0 || self.analysis_every == 0 || self.report_every == 0 {
+            bail!("snapshot_every, analysis_every and report_every must be > 0");
+        }
+        if self.report_every % self.analysis_every != 0 {
+            bail!("report_every must be a multiple of analysis_every");
         }
         if self.window == 0 {
             bail!("window must be > 0");

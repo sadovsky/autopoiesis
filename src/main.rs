@@ -267,11 +267,13 @@ fn run_one(cfg: &SimConfig, a: &RunArgs, metrics: Option<&mut Jsonl>, quiet: boo
                 && let (Some(an), Some(sink)) = (&mut analyzer, metrics.as_deref_mut())
             {
                 let rep = an.observe(t, sim.noise_rate(), &sim.cur, &edges);
-                sink.write(&rep.frame)?;
-                for d in &rep.deaths {
+                if t % cfg.report_every == 0 {
+                    sink.write(&rep.frame.trimmed(cfg.report_top))?;
+                }
+                for d in rep.deaths.iter().filter(|d| d.lifetime >= cfg.report_min_life) {
                     sink.write(d)?;
                 }
-                organisms_seen = organisms_seen.max(an.tracked_count() as u64 + rep.deaths.len() as u64);
+                organisms_seen = an.organisms_created();
             }
         }
         if let Some(r) = &mut renderer
@@ -308,10 +310,10 @@ fn run_one(cfg: &SimConfig, a: &RunArgs, metrics: Option<&mut Jsonl>, quiet: boo
     let mut total_organisms = 0u64;
     if let (Some(an), Some(sink)) = (&mut analyzer, metrics.as_deref_mut()) {
         let lives = an.finish();
-        for l in &lives {
+        for l in lives.iter().filter(|l| l.lifetime >= cfg.report_min_life) {
             sink.write(l)?;
         }
-        total_organisms = lives.iter().map(|l| l.organism_id + 1).max().unwrap_or(0);
+        total_organisms = an.organisms_created();
         sink.flush()?;
     }
     let summary = RunSummary {
