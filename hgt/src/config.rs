@@ -49,9 +49,13 @@ pub enum FounderGenes {
     /// transfer experiments are run in — the genes exist, the question is how they move.
     #[default]
     Seeded,
-    /// Random bytes. Nothing in the population answers anything, so the only way to a
-    /// working gene is to find one. This is the world the discovery experiment is run in.
+    /// Random bytes. Nothing in the population answers anything, and nothing is close
+    /// enough to climb from either: this is the floor the search is measured against.
     Random,
+    /// A working gene with `founder_miss_bits` bits flipped in its key. The population
+    /// starts a known distance from an answer, which is how far a lineage has to walk to
+    /// find one — the discovery experiment.
+    NearMiss,
 }
 
 /// Which transfer mechanisms are switched on. The A/B experiment is this struct.
@@ -235,6 +239,8 @@ pub struct HgtConfig {
 
     /// What founders start with.
     pub founder_genes: FounderGenes,
+    /// How far from working a `near_miss` founder's gene starts, in bit flips. Default 8.
+    pub founder_miss_bits: u32,
     /// Founders seeded with the resistance gene for each *future* stressor. Two, not one,
     /// so that a run does not turn on whether a single node happens to die early.
     /// Default 2.
@@ -315,6 +321,7 @@ impl Default for HgtConfig {
             loss: 0.0,
 
             founder_genes: FounderGenes::Seeded,
+            founder_miss_bits: 8,
             founder_carriers: 2,
 
             analysis_every: 10,

@@ -1,0 +1,17 @@
+{
+  "_comment": "The discovery regime: one stressor that never shifts, a survivable baseline income so a population can stay alive while it searches, and founders a known number of bit flips away from a gene that works. Everything else is the default.",
+  "nodes": 48,
+  "max_nodes": 96,
+  "hazard_kinds": 1,
+  "epoch_ticks": 1000000,
+  "founder_genes": "near_miss",
+  "founder_miss_bits": 8,
+  "income": 10,
+  "damage": 4,
+  "reward": 40,
+  "probes": 4,
+  "hazard_gradient": 1.0,
+  "mutation_rate": 0.02,
+  "analysis_every": 20,
+  "report_every": 200
+}

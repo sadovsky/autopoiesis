@@ -61,9 +61,10 @@ pub enum Event {
     Network { tick: u32, partitioned: bool },
     /// A node acquired a gene *after* it was born — always laterally.
     Acquire { tick: u32, node: NodeId, gene: GeneId, via: Acquisition, from: Option<NodeId> },
-    /// A mutated copy turned out to compute the answer to a stressor: a gene that was
-    /// found rather than inherited or received. `novel` distinguishes a genuinely
-    /// different program from a rediscovery of the seeded one's exact bytes.
+    /// A mutated copy answers a stressor its parent could not: an answer that was found
+    /// rather than inherited or received. A variant of something the parent already had
+    /// is not a discovery, whatever its bytes — nothing was found. `novel` says whether
+    /// the program differs from the one the run was seeded with.
     Discovery { tick: u32, node: NodeId, gene: GeneId, kind: u8, novel: bool },
     /// A node dropped a gene to make room for another: its genome was full and this one
     /// had never answered anything.

@@ -104,6 +104,10 @@ impl World {
                     // Unproven: nobody has seen it do anything, because it does nothing.
                     node.genome.insert(Carried::new(gene, Acquisition::Founder, None, 0, false));
                 }
+                FounderGenes::NearMiss => {
+                    let gene = Gene::new(near_miss(&env, 0, cfg.founder_miss_bits), id, 0, true);
+                    node.genome.insert(Carried::new(gene, Acquisition::Founder, None, 0, false));
+                }
             }
             nodes.insert(id, node);
         }
@@ -279,24 +283,33 @@ impl World {
                 let parent = self.nodes.get_mut(id).expect("live node");
                 parent.divide(child_id, tick, &self.cfg, &mut self.rng)
             };
-            // A mutated copy is a new program. Most are junk; occasionally one computes
-            // the answer to a stressor nobody in the population could answer, which is
-            // the only way a working gene enters this world after founding.
+            // A mutated copy is a new program. Most are junk; occasionally one answers a
+            // stressor its parent could not, which is the only way an answer enters this
+            // world after founding. A variant of a gene the parent already had is not a
+            // discovery, however different its bytes: nothing was found.
+            let budget = self.cfg.vm_budget;
             for carried in child.genome.iter() {
                 if carried.gene.origin != child.id {
                     continue;
                 }
-                if let Some(kind) = self.env.solved_kind(&carried.gene.code, self.cfg.vm_budget) {
-                    let novel = carried.gene.id != crate::gene::fnv1a(&self.env.resistance_gene(kind));
-                    events.push(Event::Discovery {
-                        tick,
-                        node: child.id,
-                        gene: carried.gene.id,
-                        kind,
-                        novel,
-                    });
-                    self.stats.discoveries += 1;
+                let Some(kind) = self.env.solved_kind(&carried.gene.code, budget) else {
+                    continue;
+                };
+                let parent_could = self.nodes.get(id).is_some_and(|p| {
+                    p.genome.iter().any(|c| self.env.solves(&c.gene.code, kind, budget))
+                });
+                if parent_could {
+                    continue;
                 }
+                let novel = carried.gene.id != crate::gene::fnv1a(&self.env.resistance_gene(kind));
+                events.push(Event::Discovery {
+                    tick,
+                    node: child.id,
+                    gene: carried.gene.id,
+                    kind,
+                    novel,
+                });
+                self.stats.discoveries += 1;
             }
             events.push(Event::Birth {
                 tick,
@@ -702,6 +715,18 @@ struct Arrival {
     donor_strain: u8,
     gene: Gene,
     via: Acquisition,
+}
+
+/// A resistance gene with `bits` bits flipped in its key: a program that is a known
+/// distance from working. The flipped positions are spread across the key rather than
+/// adjacent, so the distance is a distance and not one broken nibble.
+fn near_miss(env: &Environment, kind: u8, bits: u32) -> Vec<u8> {
+    let (key, rot) = env.secret(kind);
+    let mut mask = 0u32;
+    for i in 0..bits.min(32) {
+        mask |= 1 << ((i * 7 + 3) % 32);
+    }
+    crate::hazard::compile_resistance(key ^ mask, rot)
 }
 
 /// A founder's copy of a compiled resistance gene. Mobile, so it can be donated: a gene

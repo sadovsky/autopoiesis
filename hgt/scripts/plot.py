@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Summarise an `hgt sweep` tree: hgt/scripts/plot.py hgt/results/demo
+"""Summarise an `hgt` results tree: hgt/scripts/plot.py hgt/results/demo
 
-Reads every <dir>/<mechanisms>/seed_*.jsonl and summary.jsonl and writes summary.md
-next to them. Draws figures too if matplotlib is installed; the numbers are the point,
-so the tables are written either way.
+Walks every directory holding seed_*.jsonl, groups them by the section they sit in
+(ab/, search/, policy/, ...), and writes summary.md with one table per question the
+demo script asks. Draws frequency curves too if matplotlib is installed; the numbers do
+not depend on it.
 """
 import glob
 import json
@@ -30,7 +31,29 @@ def load(exp_dir):
                 {"frame": frames, "epoch": epochs, "gene": genes, "summary": summaries}[
                     r["kind"]
                 ].append(r)
+    if not summaries and os.path.exists(os.path.join(exp_dir, "summary.jsonl")):
+        with open(os.path.join(exp_dir, "summary.jsonl")) as f:
+            summaries = [json.loads(line) for line in f]
     return frames, epochs, genes, summaries
+
+
+def discover(root):
+    """Every experiment directory under root, keyed by its path relative to root."""
+    found = {}
+    for dirpath, _dirs, files in os.walk(root):
+        if any(f.startswith("seed_") and f.endswith(".jsonl") for f in files):
+            found[os.path.relpath(dirpath, root)] = load(dirpath)
+    return dict(sorted(found.items()))
+
+
+def section(experiments, name):
+    """The experiments under one top-level section, with the section prefix stripped."""
+    out = {}
+    for key, value in experiments.items():
+        parts = key.split(os.sep)
+        if parts[0] == name:
+            out[os.sep.join(parts[1:]) or name] = value
+    return out
 
 
 def median(xs, default=float("nan")):
@@ -38,41 +61,41 @@ def median(xs, default=float("nan")):
     return statistics.median(xs) if xs else default
 
 
+def last_frame_per_seed(frames):
+    last = {}
+    for f in frames:
+        if f["seed"] not in last or f["tick"] > last[f["seed"]]["tick"]:
+            last[f["seed"]] = f
+    return last
+
+
+def table(header, rows):
+    if not rows:
+        return "_(no runs)_"
+    line = "| " + " | ".join(header) + " |"
+    rule = "|" + "|".join("---" for _ in header) + "|"
+    return "\n".join([line, rule] + ["| " + " | ".join(str(c) for c in r) + " |" for r in rows])
+
+
 def survival_table(experiments):
-    rows = [
-        "| transfer | seeds | survived | epochs survived | freq at shift | rescue ticks "
-        "| lateral share |",
-        "|---|---|---|---|---|---|---|",
-    ]
-    for name, (frames, epochs, _genes, summaries) in experiments.items():
-        n = len(summaries)
+    rows = []
+    for name, (frames, epochs, _g, summaries) in experiments.items():
         alive = sum(1 for s in summaries if s["extinct_at"] is None)
         eps = median([s["epochs_survived"] for s in summaries])
-        # Rescue ticks for the shifts that were actually survived, epoch 1 onwards: how
-        # long the population took to make the answering gene common after a shift.
-        rescues = [e["rescue_ticks"] for e in epochs if e["epoch"] > 0 and e["survived"]]
-        # How common the answering gene already was when the stressor arrived. This is
-        # where transfer does its work: not in a rescue after the shift, but in having
-        # spread the gene around before it.
         at_shift = median([e["start_freq"] for e in epochs if e["epoch"] > 0])
         lateral = median([f["lateral_share"] for f in frames]) if frames else float("nan")
-        rows.append(
-            f"| {name} | {n} | {alive} | {eps:.0f} | {at_shift:.2f} | {median(rescues):.0f} "
-            f"| {lateral:.3f} |"
-        )
-    return "\n".join(rows)
+        rows.append([name, len(summaries), alive, f"{eps:.0f}", f"{at_shift:.2f}", f"{lateral:.3f}"])
+    return table(
+        ["run", "seeds", "survived", "epochs survived", "freq at shift", "lateral share"], rows
+    )
 
 
 def acquisition_table(experiments):
-    rows = ["| transfer | birth | conjugation | transformation | transduction | incongruence |",
-            "|---|---|---|---|---|---|"]
-    for name, (frames, _epochs, _genes, _summaries) in experiments.items():
-        if not frames:
+    rows = []
+    for name, (frames, _e, _g, _s) in experiments.items():
+        last = last_frame_per_seed(frames)
+        if not last:
             continue
-        # The last frame of each seed carries the cumulative counts for that run.
-        last = {}
-        for f in frames:
-            last[f["seed"]] = f
         acq = defaultdict(int)
         for f in last.values():
             for k, v in f["acquisitions"].items():
@@ -81,23 +104,19 @@ def acquisition_table(experiments):
             [r["incongruence"] for f in last.values() for r in f["resistance"] if r["carriers"] > 0]
         )
         rows.append(
-            f"| {name} | {acq['birth']} | {acq['conjugation']} | {acq['transformation']} "
-            f"| {acq['transduction']} | {inc:.3f} |"
+            [name, acq["birth"], acq["conjugation"], acq["transformation"], acq["transduction"],
+             f"{inc:.3f}"]
         )
-    return "\n".join(rows)
+    return table(
+        ["run", "birth", "conjugation", "transformation", "transduction", "incongruence"], rows
+    )
 
 
 def barrier_table(experiments):
-    rows = [
-        "| transfer | strain distance | attempts | redundant | accepted | rate |",
-        "|---|---|---|---|---|---|",
-    ]
+    rows = []
     for name, (frames, _e, _g, _s) in experiments.items():
-        last = {}
-        for f in frames:
-            last[f["seed"]] = f
         totals = defaultdict(lambda: [0, 0, 0])
-        for f in last.values():
+        for f in last_frame_per_seed(frames).values():
             for row in f["barrier"]:
                 totals[row["distance"]][0] += row["attempts"]
                 totals[row["distance"]][1] += row["accepted"]
@@ -108,17 +127,113 @@ def barrier_table(experiments):
             # succeeded, so the barrier's rate is over the ones that could.
             live = attempts - redundant
             rate = accepted / live if live else float("nan")
-            rows.append(
-                f"| {name} | {d} | {attempts} | {redundant} | {accepted} | {rate:.3f} |"
+            rows.append([name, d, attempts, redundant, accepted, f"{rate:.3f}"])
+    return table(["run", "strain distance", "attempts", "redundant", "accepted", "rate"], rows)
+
+
+def discovery_table(experiments):
+    rows = []
+    for name, (_f, _e, _g, summaries) in experiments.items():
+        if not summaries:
+            continue
+        found = [s for s in summaries if s.get("first_discovery") is not None]
+        firsts = [s["first_discovery"] for s in found]
+        novel = sum(s.get("novel_discoveries", 0) for s in summaries)
+        # Only the runs that found something have an answerer count worth reporting; the
+        # rest are zero by construction and would drag the median to zero.
+        answerers = median([s["solvers"][0] for s in found if s.get("solvers")])
+        rows.append(
+            [name, len(summaries), len(found), f"{median(firsts):.0f}" if firsts else "-",
+             novel, f"{answerers:.0f}" if firsts else "-"]
+        )
+    return table(
+        ["run", "seeds", "found it", "median tick found", "novel programs",
+         "answerers at the end, where found"],
+        rows,
+    )
+
+
+def policy_table(experiments):
+    rows = []
+    for name, (frames, _e, _g, summaries) in experiments.items():
+        per_seed = defaultdict(list)
+        for f in frames:
+            per_seed[f["seed"]].append(f)
+        starts, ends = [], []
+        for seed_frames in per_seed.values():
+            seed_frames.sort(key=lambda f: f["tick"])
+            for f, target in ((seed_frames[0], starts), (seed_frames[-1], ends)):
+                pol = f["policies"]
+                total = pol["always_accept"] + pol["selfish"] + pol["thrifty"]
+                target.append(pol["selfish"] / total if total else 0.0)
+        alive = sum(1 for s in summaries if s["extinct_at"] is None)
+        transfers = median([s["transfers"] for s in summaries])
+        rows.append(
+            [name, len(summaries), alive, f"{median(starts):.3f}", f"{median(ends):.3f}",
+             f"{transfers:.0f}"]
+        )
+    return table(
+        ["run", "seeds", "survived", "free riders at start", "free riders at end", "transfers"],
+        rows,
+    )
+
+
+def immunity_table(experiments):
+    rows = []
+    for name, (frames, _e, _g, _s) in experiments.items():
+        last = last_frame_per_seed(frames)
+        if not last:
+            continue
+        lysed = sum(f["lysed"] for f in last.values())
+        immune = sum(f["refusals"]["immune"] for f in last.values())
+        transduced = sum(f["acquisitions"]["transduction"] for f in last.values())
+        rows.append([name, lysed, immune, transduced])
+    return table(["run", "phage kills", "immune refusals", "transduced acquisitions"], rows)
+
+
+def partition_table(experiments):
+    rows = []
+    for name, (frames, _e, _g, summaries) in experiments.items():
+        per_seed = defaultdict(list)
+        for f in frames:
+            per_seed[f["seed"]].append(f)
+        mins, divs, worst = [], [], []
+        for seed_frames in per_seed.values():
+            mins.append(min(f["population"] for f in seed_frames))
+            divs.append(max(f["divergence"] for f in seed_frames))
+            worst.append(
+                min(min(f["sides"]["here_solvers"], f["sides"]["there_solvers"]) for f in seed_frames)
             )
-    return "\n".join(rows)
+        alive = sum(1 for s in summaries if s["extinct_at"] is None)
+        rows.append(
+            [name, len(summaries), alive, f"{median(mins):.0f}", f"{median(worst):.0f}",
+             f"{median(divs):.3f}"]
+        )
+    return table(
+        ["run", "seeds", "survived", "min population", "worst side's answerers", "peak divergence"],
+        rows,
+    )
+
+
+def genome_table(experiments):
+    rows = []
+    for name, (frames, _e, _g, summaries) in experiments.items():
+        last = last_frame_per_seed(frames)
+        if not last:
+            continue
+        alive = sum(1 for s in summaries if s["extinct_at"] is None)
+        rows.append(
+            [name, alive, f"{median([f['genome_mean'] for f in last.values()]):.2f}",
+             f"{median([f['distinct_genes'] for f in last.values()]):.0f}",
+             sum(f["refusals"]["redundant"] for f in last.values())]
+        )
+    return table(["run", "survived", "genes per node", "distinct genes", "redundant arrivals"], rows)
 
 
 def figures(experiments, out_dir):
     if plt is None:
         return []
     written = []
-    # Allele frequency of each resistance gene over time, for the lowest seed of each set.
     for name, (frames, _e, _g, _s) in experiments.items():
         if not frames:
             continue
@@ -131,16 +246,18 @@ def figures(experiments, out_dir):
                 xs, ys = series[row["resists"]]
                 xs.append(f["tick"])
                 ys.append(row["freq"])
+        if not series:
+            continue
         fig, ax = plt.subplots(figsize=(8, 3.5))
         for kind in sorted(series):
             xs, ys = series[kind]
             ax.plot(xs, ys, label=f"stressor {kind}")
         ax.set_xlabel("tick")
         ax.set_ylabel("carrier fraction")
-        ax.set_title(f"resistance gene frequency — hgt={name}, seed {seed}")
+        ax.set_title(f"resistance gene frequency — {name}, seed {seed}")
         ax.legend(fontsize="small")
         fig.tight_layout()
-        path = os.path.join(out_dir, f"frequency_{name.replace(',', '_')}.png")
+        path = os.path.join(out_dir, f"frequency_{name.replace(os.sep, '_').replace(',', '-')}.png")
         fig.savefig(path, dpi=130)
         plt.close(fig)
         written.append(path)
@@ -149,34 +266,47 @@ def figures(experiments, out_dir):
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else "hgt/results/demo"
-    experiments = {}
-    for entry in sorted(os.listdir(root)):
-        exp_dir = os.path.join(root, entry)
-        if os.path.isdir(exp_dir) and glob.glob(os.path.join(exp_dir, "seed_*.jsonl")):
-            experiments[entry] = load(exp_dir)
+    experiments = discover(root)
     if not experiments:
         sys.exit(f"no sweep output under {root}")
 
-    parts = [
-        f"# hgt sweep: {root}",
-        "",
-        "## Does the population survive stressors it was not born ready for?",
-        "",
-        survival_table(experiments),
-        "",
-        "## Where did the genes come from?",
-        "",
-        "`incongruence` is the share of a resistance gene's carriers that received it",
-        "sideways rather than inheriting it.",
-        "",
-        acquisition_table(experiments),
-        "",
-        "## The restriction barrier, as a rate",
-        "",
-        barrier_table(experiments),
-        "",
-    ]
-    for path in figures(experiments, root):
+    ab = section(experiments, "ab")
+    parts = [f"# hgt: {root}", ""]
+
+    if ab:
+        parts += [
+            "## Does the population survive stressors it was not born ready for?",
+            "",
+            survival_table(ab),
+            "",
+            "`freq at shift` is how common the answering gene already was when the stressor",
+            "arrived. That, not a rescue afterwards, is where transfer does its work.",
+            "",
+            "## Where did the genes come from?",
+            "",
+            "`incongruence` is the share of a resistance gene's carriers that received it",
+            "sideways rather than inheriting it.",
+            "",
+            acquisition_table(ab),
+            "",
+            "## The restriction barrier, as a rate",
+            "",
+            barrier_table(ab),
+            "",
+        ]
+
+    for name, title, fn in [
+        ("search", "## Can a gene be found rather than received?", discovery_table),
+        ("policy", "## Do free riders take over?", policy_table),
+        ("immunity", "## What does an immune system buy, and cost?", immunity_table),
+        ("partition", "## What does cutting the network cost?", partition_table),
+        ("unproven", "## What if nodes offer genes nobody has seen work?", genome_table),
+    ]:
+        sub = section(experiments, name)
+        if sub:
+            parts += [title, "", fn(sub), ""]
+
+    for path in figures(ab or experiments, root):
         parts.append(f"![{os.path.basename(path)}]({os.path.basename(path)})")
     if plt is None:
         parts.append("_(matplotlib not installed: tables only)_")

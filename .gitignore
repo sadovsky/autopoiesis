@@ -5,3 +5,5 @@ snapshots/
 results/*/seed_*.jsonl
 hgt/results/**/seed_*.jsonl
 hgt/results/**/node_*.jsonl
+hgt/results/**/ancestry.*
+hgt/results/**/transfers.tsv

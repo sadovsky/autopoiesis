@@ -13,9 +13,10 @@ sideways, and can be measured doing so.
 cargo run --release -p hgt -- --seed 1 --ticks 3000 --hgt none     # watch it die
 cargo run --release -p hgt -- --seed 1 --ticks 3000                # watch it not
 cargo run --release -p hgt -- --render                             # watch it happen
+cargo run --release -p hgt -- --config hgt/configs/search.json     # watch it find a gene
 cargo run --release -p hgt -- arena --processes 4 --base-port 9000  # over real sockets
-./hgt/scripts/demo.sh                                              # the whole experiment
-cargo test -p hgt                                                  # 47 tests
+./hgt/scripts/demo.sh                                              # every experiment
+cargo test -p hgt                                                  # 56 tests
 ```
 
 This crate is independent of the `autopoiesis` simulation in the repository root; it
@@ -40,8 +41,9 @@ src/
   metrics.rs    allele frequency, incongruence, fixation, the barrier as a rate
   render.rs     terminal view, coloured by how each node got what it holds
   main.rs       CLI: run, node, arena, analyze, sweep
-tests/          isa_roundtrip, vm_sandbox, hgt_mechanisms, determinism, transport
-scripts/        demo.sh (the experiment), plot.py (tables and figures)
+tests/          isa_roundtrip, vm_sandbox, hgt_mechanisms, evolution, determinism, transport
+scripts/        demo.sh (every experiment), plot.py (tables and figures)
+configs/        search.json — the regime a gene can be *found* in
 examples/       ab.rs (the A/B on stdout), gene.rs (disassemble a resistance gene)
 ```
 
@@ -97,10 +99,16 @@ mutated byte in the wrong place destroys the gene, and why most mutants are junk
 **upkeep → face the stressor → network → death → fission.**
 
 A node pays to stay alive and pays again per gene it carries, then runs its genes against
-the stressor — most recently useful first — until one answers, paying for each trial. An
-answer earns energy; no answer costs `damage`. Above a threshold a node divides, and the
-child inherits the genome with per-byte mutation and occasional plasmid loss. At zero
-energy it dies.
+the stressor — most recently useful first — paying for each trial and stopping early on an
+exact answer. Above a threshold a node divides, and the child inherits the genome with
+point mutations and occasional plasmid loss. At zero energy it dies, and at the population
+ceiling a birth displaces a node chosen at random.
+
+**Credit** is what the best gene scored. An exact answer is 1; a near miss earns
+`hazard_gradient` times its score above chance (`hazard.rs`); silence earns nothing.
+Energy gained and damage taken are split by it. At `hazard_gradient = 0` the stressor is
+answered exactly or not at all and a working gene can only ever be inherited or received;
+above 0 the key becomes a gradient a lineage can climb, and genes can be **found**.
 
 Two rules keep this from degenerating, and both were forced by the experiment rather than
 designed in:
@@ -109,12 +117,22 @@ designed in:
   population accumulates every copy that ever passed through it and starves under the
   upkeep. Taking on a new gene evicts the most recently acquired one that has never
   answered anything.
-* **Only genes known to work are offered.** A gene carries whether it has been seen to
-  work — seeded, or having answered a stressor, or inherited or received unchanged from a
-  copy for which one of those was true. Junk therefore dies with its host, while a spare
-  gene that is useless *this* epoch still circulates freely. Deleting long-disused genes
-  was tried first and is exactly wrong: it removes the reservoir the population needs at
-  the next shift.
+* **Only genes known to work are offered** (`offer_unproven` turns this off, so the
+  regime it prevents can be measured rather than asserted). A gene carries whether it has
+  been seen to work — seeded, or having answered a stressor, or inherited or received
+  unchanged from a copy for which one of those was true. Junk therefore dies with its
+  host, while a spare gene that is useless *this* epoch still circulates freely. Deleting
+  long-disused genes was tried first and is exactly wrong: it removes the reservoir the
+  population needs at the next shift.
+* **A birth at the ceiling displaces someone.** A population pinned at `max_nodes` with no
+  turnover cannot be selected on, however good a gene is. The displaced node is chosen at
+  random — evicting the *weakest* was tried and is worse, because the weakest node is
+  usually one that has just divided and handed half its energy away, so it selects against
+  reproducing at all.
+* **Mutation flips one bit**, rather than replacing a byte. Replacing changes the opcode
+  fifteen times in sixteen, so nearly every mutation is fatal and no lineage can walk
+  anywhere; a bit flip lands in the operand half the time and leaves the instruction doing
+  the same thing to a slightly different value.
 
 ## How genes move
 
@@ -132,9 +150,21 @@ Each mechanism is independently switchable (`--hgt none|all|conj,transf,transd`)
   gene reaches a lineage that would never have asked for it.
 
 A **restriction barrier** grades every arrival by strain distance (differing bits in the
-strain label), so transfer is a rate set by relatedness rather than a certainty. A
-**policy** (`always_accept`, `selfish`, `thrifty`) decides what a node offers and accepts;
-dying is not a choice, so a selfish node's genes still leak when it starves.
+strain label), so transfer is a rate set by relatedness rather than a certainty. On top of
+it, `crispr_rate` gives nodes an **acquired immune memory**: surviving a phage can teach a
+node to cut that gene on sight, and the memory is inherited. It cannot tell a parasite
+from a gene the node will need, which is the point — protection has a price, and the price
+is measured below.
+
+A **policy** (`always_accept`, `selfish`, `thrifty`) decides what a node offers and
+accepts. It is a heritable trait of a node, not a setting of the run: children inherit it,
+`policy_drift` mutates it, and `selfish_founders` drops free riders into a population of
+donors to see what happens. Dying is not a choice, so a selfish node's genes still leak
+when it starves.
+
+The network itself is a scenario knob: `partition_at` splits it in two and
+`partition_heal_at` puts it back. Which side a node is on is a pure function of its id, so
+nodes born during a partition need nobody to assign them.
 
 ## Two ways to run it
 
@@ -169,49 +199,134 @@ stressor schedule is a function of `(config, seed)` and it has both.
   indiscriminately and would otherwise bury the signal.
 * **Epoch records** — population through each shift, how common the answering gene was
   when the stressor arrived, and the ticks from the shift to it sweeping.
+* **Answerers** per stressor — carriers of *any* gene that answers it, by function rather
+  than by gene id, so a variant discovered mid-run counts.
+* **Discoveries** — a mutated copy that answers a stressor its parent could not. A variant
+  of a gene the parent already had is not a discovery, however different its bytes.
+* **Policy composition**, and **the two sides** of a partition with the frequency distance
+  between their gene pools.
+* **The two graphs.** `--trees DIR` writes the family tree (`ancestry.tsv`,
+  `ancestry.newick`) and the transfer graph (`transfers.tsv`). With no mechanism on, the
+  second file is empty: a gene's history is a subtree of the first. Every row in it is a
+  place where the two disagree.
 
 ## Results
 
-`./hgt/scripts/demo.sh` — 8 seeds, 3000 ticks (10 epochs), defaults otherwise. Full
-tables in `results/demo/summary.md`.
+`./hgt/scripts/demo.sh` — 8 seeds, 3000 ticks (10 epochs) unless noted, defaults
+otherwise. Full tables in `results/demo/summary.md`.
+
+**Does a population survive stressors it was not born ready for?**
 
 | transfer | survived | epochs survived | freq at shift | lateral share |
 |---|---|---|---|---|
-| none | 0/8 | 2 | 0.01 | 0.000 |
-| conjugation | 8/8 | 10 | 0.94 | 0.093 |
-| transformation | 4/8 | 6 | 0.69 | 0.010 |
-| transduction | 8/8 | 10 | 0.96 | 0.107 |
-| all three | 8/8 | 10 | 0.97 | 0.108 |
+| none | 0/8 | 2 | 0.00 | 0.000 |
+| conjugation | 4/8 | 6 | 0.21 | 0.047 |
+| transformation | 0/8 | 2 | 0.00 | 0.018 |
+| transduction | 8/8 | 10 | 0.46 | 0.053 |
+| all three | 8/8 | 10 | 0.55 | 0.057 |
 
-Without transfer every seed is extinct by tick 614 — the second shift, once the founders'
-descendants run out of stressors they were born ready for. The interesting column is
-**freq at shift**: with transfer the answering gene is already in 94-97% of the population
-*when the stressor arrives*. Transfer does not rescue the population after the crisis; it
-distributes the gene before there is one. Transformation is the weak mechanism for the
-reason given above, and shows it: half the seeds die.
+Without transfer every seed is extinct in the second epoch, once the founders' descendants
+run out of stressors they were born ready for. The column that explains the rest is **freq
+at shift**: how common the answering gene already was *when the stressor arrived*.
+Transfer does not rescue a population after the crisis; it distributes the gene before
+there is one. Transformation alone never manages it — free DNA comes from the dead, and
+the dead are mostly those who lacked the gene worth having.
 
-The restriction barrier, over attempts that were not already redundant:
+**The restriction barrier**, as an acceptance rate over attempts that were not already
+redundant:
 
 | strain distance | conjugation | transformation | transduction |
 |---|---|---|---|
-| 0 | 0.097 | 0.692 | 0.516 |
-| 1 | 0.040 | 0.482 | 0.391 |
-| 2 | 0.018 | 0.179 | 0.176 |
+| 0 | 0.231 | 0.943 | 0.284 |
+| 1 | 0.213 | 0.630 | 0.197 |
+| 2 | 0.120 | 0.259 | 0.113 |
 
-Over real sockets, four processes, 600 ticks, only process 0 founded with the genes for
-the later stressors:
+**Can a gene be found rather than received?** `configs/search.json`: one stressor that
+never shifts, an income a population can search on, and founders a known number of bit
+flips from a gene that works. 16 seeds, 10000 ticks.
+
+| distance from a working gene | without transfer | with transfer |
+|---|---|---|
+| 4 bits | 7/16 found, median tick 3300 | 12/16 found, median tick 1320 |
+| 8 bits | 9/16, 3600 | 10/16, 2700 |
+| 12 bits | 3/16, 6620 | 6/16, 3540 |
+| 16 bits | 0/16 | 0/16 |
+
+Yes, up to a horizon. Four bit flips away a lineage walks to the answer in a few thousand
+ticks; sixteen away nobody ever does, in any seed, with or without help. Transfer finds it
+sooner and in more seeds at every distance where it is findable at all — but the sharper
+difference is in the last column of the full table: at the end of a run, the number of
+nodes able to answer is **zero** without transfer and six to eight with it. Discovery is
+vertical, and it happens in one lineage; whether the population *keeps* what that lineage
+found is lateral.
+
+Nothing is offered until it works, so before the first discovery there is nothing for
+transfer to move — the runs where no gene is ever found show zero transfers, in both
+columns. Transfer cannot help you search. It can only stop you losing what the search
+turned up.
+
+**Do free riders take over?** Eight of forty-eight founders start `selfish` — they accept
+genes and offer none — and policy is inherited.
+
+| run | survived | free riders at start | free riders at end | transfers |
+|---|---|---|---|---|
+| inherited only | 8/8 | 0.167 | 0.626 | 8610 |
+| with 2% drift | 8/8 | 0.167 | 0.823 | 8615 |
+
+They do. A free rider pays none of conjugation's cost and takes everything a phage or a
+corpse offers, so its share rises from a sixth to two thirds — and the population survives
+anyway, because transduction and transformation need no donor's consent. A world with only
+conjugation would not be so lucky.
+
+**What does an immune system buy, and cost?**
+
+| crispr_rate | phage kills | immune refusals | transduced acquisitions |
+|---|---|---|---|
+| 0.0 | 739 | 0 | 32991 |
+| 0.5 | 159 | 316115 | 22320 |
+| 1.0 | 112 | 375959 | 18815 |
+
+Phage kills fall by a factor of six. The price is a third of the population's transduced
+gene flow: an immune memory cannot tell a parasite from a gene you are going to need.
+
+**What does cutting the network cost?** One founder per future stressor, split from tick 0.
+
+| network | survived | min population | worst side's answerers | peak divergence |
+|---|---|---|---|---|
+| whole | 8/8 | 48 | 22 | 0.141 |
+| cut at 0 | 2/8 | 46 | 0 | 0.165 |
+| cut, healed at 400 | 2/8 | 48 | 0 | 0.140 |
+
+Six of eight populations die when the network is split, because the gene that answers the
+next stressor is on one side of the cut and the stressor is on both. Healing at tick 400
+does not help: the first shift is at 300, and by then it has happened.
+
+**What if nodes offer genes nobody has seen work?**
+
+| offering | survived | genes per node | distinct genes |
+|---|---|---|---|
+| proven only | 8/8 | 4.94 | 197 |
+| everything | 7/8 | 4.96 | 239 |
+
+Milder than it used to be, and for a reason worth stating: the genome cap now absorbs most
+of the damage that this rule was introduced to prevent. What is left is a wider junk pool
+(239 distinct genes against 197) and one seed lost.
+
+**Over real sockets**, four processes, 600 ticks, only process 0 founded with the genes
+for the later stressors:
 
 ```
-process 0: 60 nodes, 47 acquisitions (14 from another process), 10195 envelopes sent
-process 1: 60 nodes, 64 acquisitions (30 from another process),  9626 envelopes sent
-process 2: 60 nodes, 63 acquisitions (21 from another process),  9539 envelopes sent
-process 3: 60 nodes, 54 acquisitions (18 from another process),  9014 envelopes sent
-240 nodes alive; 83 genes crossed a socket
+process 0: 60 nodes, 50 acquisitions (13 from another process), 8061 envelopes sent
+process 1: 60 nodes, 46 acquisitions (18 from another process), 8551 envelopes sent
+process 2: 60 nodes, 46 acquisitions (15 from another process), 8400 envelopes sent
+process 3:  0 nodes, 46 acquisitions (17 from another process), 4222 envelopes sent
+180 nodes alive; 63 genes crossed a socket
 ```
 
 The same command with `--hgt none`: every process extinct, nothing crossed. Processes 1-3
-began with no spare genes at all, so everything that kept them alive arrived as bytes on
-a TCP connection.
+began with no spare genes at all, so everything that kept them alive arrived as bytes on a
+TCP connection — and process 3 went under anyway, which is what a partition of one looks
+like when the genes arrive too late.
 
 ## Acceptance tests
 
@@ -227,6 +342,12 @@ a TCP connection.
 * one seed is one run — world hash, event log and metrics all identical; measuring live
   and re-deriving from the log agree exactly; a lossy network is still repeatable
   (`tests/determinism.rs`)
+* a population climbs to a gene nobody gave it, and cannot on a flat landscape; policy is
+  inherited and drifts; an immune memory cuts phages and costs the genes they carried; the
+  transfer graph is empty without a mechanism and every edge in it joins the family tree
+  sideways (`tests/evolution.rs`)
+* a split network bottlenecks harder than a whole one and reports itself split
+  (`tests/transport.rs`)
 * a gene crosses a real socket unchanged; a deme founded with no spare genes survives on
   what arrives over the wire, and dies without it (`tests/transport.rs`, `src/tcp.rs`)
 
@@ -252,8 +373,11 @@ with `--config`.
 ## Things deliberately not done
 
 No fitness function beyond surviving the stressor, and no reward for anything a node does
-to another. No recombination inside a gene — transfer moves whole genes, mutation is
-substitution only. No genuine sandboxing claim beyond the interpreter's own limits: the
+to another. No recombination inside a gene — transfer moves whole genes, mutation flips
+single bits, and nothing is ever inserted or deleted, so every gene is exactly as long as
+the one it came from. No genuine sandboxing claim beyond the interpreter's own limits: the
 VM is safe because it is tiny, not because it is hardened. No attempt to make the TCP path
 deterministic, and no global observer over it — each process measures its own deme,
-because in a real distributed system that is all anyone has.
+because in a real distributed system that is all anyone has. The renderer has never been
+run in this repository's CI, which has no terminal; its painting functions are tested, the
+live view is not.

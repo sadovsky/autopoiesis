@@ -88,6 +88,12 @@ struct RunArgs {
     /// What founders start holding.
     #[arg(long, value_enum)]
     founder_genes: Option<FounderGenes>,
+    /// How far a near-miss founder's gene starts from working, in bit flips.
+    #[arg(long)]
+    founder_miss_bits: Option<u32>,
+    /// Founders holding the gene for each future stressor.
+    #[arg(long)]
+    founder_carriers: Option<usize>,
     /// Founders that start as free riders.
     #[arg(long)]
     selfish_founders: Option<usize>,
@@ -252,6 +258,12 @@ fn build_config(a: &RunArgs) -> Result<HgtConfig> {
     if let Some(f) = a.founder_genes {
         cfg.founder_genes = f;
     }
+    if let Some(c) = a.founder_carriers {
+        cfg.founder_carriers = c;
+    }
+    if let Some(b) = a.founder_miss_bits {
+        cfg.founder_miss_bits = b;
+    }
     if let Some(n) = a.selfish_founders {
         cfg.selfish_founders = n;
     }
@@ -337,6 +349,12 @@ struct RunSummary {
     attempts: u64,
     transfers: u64,
     lateral_share: f64,
+    /// Mutated genes that turned out to answer a stressor, and the first tick one did.
+    discoveries: u64,
+    novel_discoveries: u64,
+    first_discovery: Option<u32>,
+    /// Nodes holding a gene that answers each stressor, at the end.
+    solvers: Vec<u32>,
     /// Ticks from each stressor shift to the answering gene reaching fixation.
     rescue_ticks: Vec<Option<u32>>,
     hash: String,
@@ -349,6 +367,10 @@ struct Collector {
     epochs_survived: u32,
     rescue_ticks: Vec<Option<u32>>,
     lateral_share: f64,
+    discoveries: u64,
+    novel_discoveries: u64,
+    first_discovery: Option<u32>,
+    solvers: Vec<u32>,
 }
 
 impl Collector {
@@ -357,6 +379,12 @@ impl Collector {
             match &rec {
                 Record::Frame(f) => {
                     self.lateral_share = f.lateral_share;
+                    self.discoveries = f.discoveries;
+                    self.novel_discoveries = f.novel_discoveries;
+                    self.solvers = f.solvers.clone();
+                    if f.discoveries > 0 && self.first_discovery.is_none() {
+                        self.first_discovery = Some(f.tick);
+                    }
                     // Frames are computed every `analysis_every` ticks and written every
                     // `report_every`: measuring often is cheap, writing often is not.
                     if !f.tick.is_multiple_of(self.report_every) {
@@ -389,6 +417,10 @@ fn run(cfg: HgtConfig, a: &RunArgs) -> Result<RunSummary> {
         epochs_survived: 0,
         rescue_ticks: Vec::new(),
         lateral_share: 0.0,
+        discoveries: 0,
+        novel_discoveries: 0,
+        first_discovery: None,
+        solvers: Vec::new(),
     };
     let mut extinct_at = None;
     let mut renderer = if a.render { Some(Renderer::new(a.show, a.fps)?) } else { None };
@@ -443,6 +475,10 @@ fn run(cfg: HgtConfig, a: &RunArgs) -> Result<RunSummary> {
         attempts: world.stats.attempts,
         transfers: world.stats.transfers,
         lateral_share: out.lateral_share,
+        discoveries: out.discoveries,
+        novel_discoveries: out.novel_discoveries,
+        first_discovery: out.first_discovery,
+        solvers: out.solvers.clone(),
         rescue_ticks: out.rescue_ticks.clone(),
         hash: format!("{:016x}", world.hash()),
     };
@@ -608,6 +644,10 @@ fn node(cfg: HgtConfig, a: &RunArgs, index: u32, listen: SocketAddr, peers: &[So
         epochs_survived: 0,
         rescue_ticks: Vec::new(),
         lateral_share: 0.0,
+        discoveries: 0,
+        novel_discoveries: 0,
+        first_discovery: None,
+        solvers: Vec::new(),
     };
     let (mut foreign, mut acquisitions) = (0u64, 0u64);
 
@@ -759,7 +799,7 @@ fn main() -> Result<()> {
             let s = run(cfg, &cli.run)?;
             println!(
                 "seed={} hgt={} ticks={} population={} epochs_survived={} births={} deaths={} \
-                 transfers={}/{} lateral_share={:.3} hash={}",
+                 transfers={}/{} lateral_share={:.3} discovered={} first={} hash={}",
                 s.seed,
                 s.mechanisms,
                 s.ticks,
@@ -770,6 +810,8 @@ fn main() -> Result<()> {
                 s.transfers,
                 s.attempts,
                 s.lateral_share,
+                s.discoveries,
+                s.first_discovery.map_or("never".to_string(), |t| t.to_string()),
                 s.hash
             );
             Ok(())
