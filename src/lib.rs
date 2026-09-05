@@ -7,5 +7,7 @@ pub mod energy;
 pub mod grid;
 pub mod isa;
 pub mod noise;
+pub mod render;
 pub mod sim;
+pub mod snapshot;
 pub mod vm;
