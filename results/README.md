@@ -181,6 +181,11 @@ above.
 
 ## What to change next (plan §8, informed by the above)
 
+*Update: items 1–3 were run; see `variants/README.md`. Template repair removes the soup
+and nothing replaces it; the trap fix alone changes nothing; scarcity thins the soup. A
+hand-designed template structure is an exact fixed point without noise but has a
+vitality of 1.5 × 10⁻⁴, because every byte is executed as code by its eight neighbours.*
+
 1. **`Repair` should not copy `self.instr`.** The §8 alternative — copy from the cell
    behind in the `ip` chain — makes repair an act of *reading a template* rather than
    *cloning yourself*, so a heterogeneous structure can be maintained and a mutation
