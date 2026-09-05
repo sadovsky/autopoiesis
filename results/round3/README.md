@@ -15,8 +15,8 @@ earlier protocols for comparison.
 | `probe_*` | both | `--probe-every 1000` | perturbation probe: restoration vs matched background (C1) |
 | `tok_copyself`, `tok_register`, `tok_opposite`, `tok_null` | token | `--exec-model token --sun 1` | random init under each repair rule (phase B) |
 | `tok_strip_ramp`, `hl_tok_*` | token | + strips | designed structure under the token model |
-
-*(Numbers are filled in below from `plots/summary.md` once both sweeps finish.)*
+| `hlc_pt_*`, `hlc_reg_*`, `hlc_tok_*` | both | full-width strips, uniform sun | closed structures: noise as the only perturbation |
+| `probe_tok_copyself` | token | copy-self + probe | probe on the only token world with organisms |
 
 ## Headline
 
@@ -221,6 +221,49 @@ Sun 1.0 at the bright edge (cells only spend while they hold a token), `token_ra
   47 % intact after 100 ticks and 1 % after 10 000, identically at noise 10⁻⁴ and 10⁻²
   (`hl_tok_*`, `tok_strip_ramp`). That number is edge import, not noise. The closed
   version (`hlc_*`: full width, uniform sun, noise the only perturbation) is what
-  measures the belt's own response to noise; its table is in `plots/summary.md`.
-  *(filled in below when the closed runs finish.)*
+  measures the belt's own response to noise (next section).
+* **Probe on the copy-self token world** (`probe_tok_copyself`, 4 919 probes): bytes
+  restored after one window 0.633 inside organisms of 10–99 cells vs 0.638 in the
+  matched background; 0.618 vs 0.563 for organisms ≥ 100 cells. The high absolute
+  numbers are the token soup rewriting `Repair` bytes onto everything around it, inside
+  and outside "organisms" alike; the difference between the two is again within noise.
+
+### Closed structures: the belts' own response to noise (`hlc_*`)
+
+Full-width band (128 columns) at uniform sun, so there is no edge to import from and
+noise is the only perturbation. Half-life of the seeded bytes, mean of 10 seeds
+(`plots/halflife_vs_noise.png`):
+
+| noise | register tiling (neighbourhood) | pass-through strips (neighbourhood) | pass-through strips (token) |
+|---|---|---|---|
+| 10⁻⁴ | 1 000 ticks | 400 | 300 |
+| 3 × 10⁻⁴ | 600 | 300 | 300 |
+| 10⁻³ | 400 | 200 | 300 |
+| 3 × 10⁻³ | 300 | 200 | 200 |
+| 10⁻² | 100 | 100 | 100 |
+
+Read against the mutation load: at noise 10⁻⁴ a 16 384-cell structure takes 1.6
+mutations per tick, so by tick 400 about 4 % of its cells have been hit — yet the
+pass-through strips have lost half their bytes and the register tiling half by tick
+1 000. **Each mutation destroys many cells**, which is the belt mechanism seen in the
+unit test at full scale: a defect is relayed along its class until an intact upstream
+value catches up with it, if one ever does, and a writing defect takes the relays down
+with it. Between 10⁻⁴ and 10⁻³ the strips' half-life is nearly flat (300–400 ticks):
+the decay is set by how fast relays carry defects, not by how often they arrive. The
+register tiling decays most slowly (1 000 → 100 ticks over two decades) because each
+of its cells is rewritten 3–6 times per sweep, so a defect is usually overwritten
+before the next relay reads it; it is still gone within 20 000 ticks at every noise
+level. Under the token model the strips have no code/data coupling at all and decay
+just as fast as under neighbourhood execution: the coupling was never the binding
+constraint. The binding constraint is that nothing compares two copies.
+
+## Bottom line for the round
+
+| question | answer |
+|---|---|
+| Does pass-through repair avoid the soup? (A) | No — a bigger one (75 % of the grid). |
+| Does decoupling code from data (token model) let designed structures survive noise? (B) | No — the same belts, the same decay; and random init yields an empty repair graph. |
+| Does anything, in any of the nine substrates measured, actively restore its own bytes? (C, probe) | No — restoration inside every organism equals the matched background (0.18 vs 0.16, 0.22 vs 0.17, 0.32 vs 0.26, 0.29 vs 0.31, 0.63 vs 0.64, 0.62 vs 0.56). |
+| Is any organism more stable than a world without repair at the same spot? (C, null twin) | No — median ratio 0.18–0.87; 0 rows above 3 in 2.8 million. |
+| What would change it? | A vote between two data copies gated on every write, plus enough instruction slots per cell to afford it — see "What would change it". |
 
