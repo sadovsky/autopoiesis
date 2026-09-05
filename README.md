@@ -17,7 +17,8 @@ cargo test                                                        # 34 tests
 ```
 
 Results of the protocol in `results/` (see `results/README.md`); the §8 follow-up
-(template repair, no-self-jump, scarcity) in `results/variants/`.
+(template repair, no-self-jump, scarcity) in `results/variants/`. What to do next:
+`docs/continuation-plan.md`.
 
 ## Layout
 
