@@ -18,6 +18,21 @@ pub enum SunProfile {
     Uniform,
 }
 
+/// What `Repair(d)` writes into its target (plan §8: is copying `self.instr` too easy?).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairSource {
+    /// `nbr(d).instr = self.instr` — the plan's original. Makes `Repair` a replicator.
+    CopySelf,
+    /// `nbr(d).instr = reg` — repair writes a template the cell previously `Load`ed,
+    /// so maintenance has to be encoded as a Load/Repair loop.
+    Register,
+    /// `nbr(d).instr = <byte of the cell behind in the ip chain>` — the neighbourhood
+    /// cell executed one step before the `Repair` byte (ip − 1). Structures are
+    /// (template, Repair) pairs in neighbourhood order.
+    Previous,
+}
+
 /// Energy debited per executed instruction.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(default)]
@@ -127,6 +142,13 @@ pub struct SimConfig {
     pub halt_threshold: u16,
     /// Per-instruction energy costs.
     pub costs: Costs,
+    /// What `Repair` writes. Default `copy_self`.
+    pub repair_source: RepairSource,
+    /// If true, a `MoveIp`/taken `JmpIfZero` whose destination is the neighbourhood
+    /// slot the cell is *currently* fetching from advances instead of jumping. This
+    /// breaks the self-loop trap (a neighbour holding `MoveIp` pointing back at itself
+    /// freezes every cell whose ip lands on it). Default false.
+    pub no_self_jump: bool,
     /// Repair-graph window in ticks: edge `a -> b` exists if `a` repaired `b` within
     /// the last `window` ticks. Also the grace period before an unmatched organism is
     /// declared dead. Default 100.
@@ -198,6 +220,8 @@ impl Default for SimConfig {
             share_rate: 4,
             halt_threshold: 20,
             costs: Costs::default(),
+            repair_source: RepairSource::CopySelf,
+            no_self_jump: false,
             window: 100,
             min_size: 3,
             mi_lag: 100,
@@ -257,7 +281,7 @@ impl SimConfig {
         if self.snapshot_every == 0 || self.analysis_every == 0 || self.report_every == 0 {
             bail!("snapshot_every, analysis_every and report_every must be > 0");
         }
-        if self.report_every % self.analysis_every != 0 {
+        if !self.report_every.is_multiple_of(self.analysis_every) {
             bail!("report_every must be a multiple of analysis_every");
         }
         if self.window == 0 {

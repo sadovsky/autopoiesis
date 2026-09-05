@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use autopoiesis::config::{NoiseRamp, SimConfig, SunProfile};
+use autopoiesis::config::{NoiseRamp, RepairSource, SimConfig, SunProfile};
 use autopoiesis::metrics::Analyzer;
 use autopoiesis::render::{Renderer, ShowMode};
 use autopoiesis::sim::Sim;
@@ -54,6 +54,14 @@ struct RunArgs {
     /// Override the Repair cost.
     #[arg(long)]
     repair_cost: Option<u16>,
+    /// What Repair writes: copy-self (plan), register (Load/Repair loop) or previous
+    /// (byte of the neighbourhood slot executed just before the Repair).
+    #[arg(long, value_enum)]
+    repair_source: Option<RepairSourceArg>,
+    /// A jump back onto the slot currently being fetched from advances instead
+    /// (breaks the MoveIp self-loop trap).
+    #[arg(long)]
+    no_self_jump: bool,
     /// Inject a hand-written repairing ring at t = 0.
     #[arg(long)]
     seed_ring: bool,
@@ -95,6 +103,13 @@ struct RunArgs {
     /// Print a progress line every N ticks (0 = never).
     #[arg(long, default_value_t = 0)]
     progress: u32,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum RepairSourceArg {
+    CopySelf,
+    Register,
+    Previous,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -159,6 +174,16 @@ fn build_config(a: &RunArgs) -> Result<SimConfig> {
     }
     if let Some(c) = a.repair_cost {
         cfg.costs.repair = c;
+    }
+    if let Some(r) = a.repair_source {
+        cfg.repair_source = match r {
+            RepairSourceArg::CopySelf => RepairSource::CopySelf,
+            RepairSourceArg::Register => RepairSource::Register,
+            RepairSourceArg::Previous => RepairSource::Previous,
+        };
+    }
+    if a.no_self_jump {
+        cfg.no_self_jump = true;
     }
     if a.seed_ring {
         cfg.seed_ring = true;

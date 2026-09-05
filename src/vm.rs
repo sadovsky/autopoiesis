@@ -11,7 +11,15 @@
 //! sweeps its neighbourhood. `MoveIp(d)` / a taken `JmpIfZero(d)` set `ip` to the
 //! neighbour `d` instead, so control can loop within the neighbourhood, and a region
 //! whose cells hold the same bytes behaves as one program. `Halt` freezes `ip` (at no
-//! cost) while energy is at or below `halt_threshold`.
+//! cost) while energy is at or below `halt_threshold`. With `cfg.no_self_jump` a jump
+//! whose destination is the slot currently being fetched from advances instead, which
+//! removes the self-loop trap (a neighbour's `MoveIp` pointing back at itself would
+//! otherwise freeze the cell for good).
+//!
+//! What `Repair(d)` writes is `cfg.repair_source`: the cell's own byte (`copy_self`,
+//! the plan's original), its `reg` (`register`), or the byte of the neighbourhood slot
+//! executed just before the `Repair` (`previous`, the plan's §8 alternative). The tag
+//! is always the repairer's.
 //!
 //! All reads come from `cur`; all writes go to `next`, which starts as a copy of
 //! `cur`. Fields a cell owns (`ip`, `reg`, `tag` via `SetTag`, its own energy debit)
@@ -33,7 +41,7 @@
 //! empty space). A cell that still has 0 energy at the start of a tick (no sun) simply
 //! does not execute.
 
-use crate::config::SimConfig;
+use crate::config::{RepairSource, SimConfig};
 use crate::grid::{Cell, Grid, NEIGHBORHOOD, Topology};
 use crate::isa::Instruction;
 use rand::RngExt;
@@ -110,7 +118,7 @@ impl Vm {
 
             match instr {
                 Instruction::Nop => {}
-                Instruction::MoveIp(d) => new_ip = (d & 7) + 1,
+                Instruction::MoveIp(d) => new_ip = jump(cfg, ip, d),
                 Instruction::Load(d) => {
                     next.cells[i].reg = cur.cells[topo.neighbor(i, d)].instr;
                 }
@@ -120,7 +128,16 @@ impl Vm {
                 }
                 Instruction::Repair(d) => {
                     let t = topo.neighbor(i, d);
-                    self.propose_write(t, c.energy, c.instr, Some(c.tag), &mut stats);
+                    let byte = match cfg.repair_source {
+                        RepairSource::CopySelf => c.instr,
+                        RepairSource::Register => c.reg,
+                        RepairSource::Previous => {
+                            let prev = (ip + NEIGHBORHOOD - 1) % NEIGHBORHOOD;
+                            let p = if prev == 0 { i } else { topo.neighbor(i, prev - 1) };
+                            cur.cells[p].instr
+                        }
+                    };
+                    self.propose_write(t, c.energy, byte, Some(c.tag), &mut stats);
                     repairs.push((i as u32, d & 7));
                     stats.repairs += 1;
                 }
@@ -129,7 +146,7 @@ impl Vm {
                 }
                 Instruction::JmpIfZero(d) => {
                     if c.reg == 0 {
-                        new_ip = (d & 7) + 1;
+                        new_ip = jump(cfg, ip, d);
                     }
                 }
                 Instruction::Absorb(d) => {
@@ -192,5 +209,18 @@ impl Vm {
             instr,
             tag,
         };
+    }
+}
+
+/// Destination ip for a jump to neighbour `d` from current ip `ip`. With
+/// `no_self_jump`, jumping back onto the slot currently being fetched from (the
+/// self-loop trap) advances instead.
+#[inline]
+fn jump(cfg: &SimConfig, ip: u8, d: u8) -> u8 {
+    let target = (d & 7) + 1;
+    if cfg.no_self_jump && target == ip {
+        (ip + 1) % NEIGHBORHOOD
+    } else {
+        target
     }
 }
