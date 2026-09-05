@@ -455,8 +455,11 @@ pub struct OrganismRow {
     pub core_size: usize,
     pub dependents: usize,
     pub parasites: usize,
-    /// Centroid-ish anchor: the smallest core index, for locating it in a snapshot.
+    /// Smallest core index, for locating the organism in a snapshot.
     pub anchor: u32,
+    /// Mean x and y of the core cells (wrap-naive; x is the sun-gradient axis).
+    pub cx: f64,
+    pub cy: f64,
     pub mi_region: f64,
     pub mi_random: f64,
     pub persistence: f64,
@@ -479,9 +482,14 @@ pub struct FrameRecord {
     pub max_persistence: f64,
     /// Fraction of all cells whose byte is unchanged over the lag (0 if no lag frame yet).
     pub background_stability: f64,
+    /// Number of SCC-core cells per column band: `CORE_X_BINS` equal bins across x.
+    pub core_x_hist: Vec<u32>,
     pub repair_edges: usize,
     pub organisms: Vec<OrganismRow>,
 }
+
+/// Number of x bins in `FrameRecord::core_x_hist`.
+pub const CORE_X_BINS: usize = 16;
 
 /// Lifetime record, emitted when an organism dies or when the run ends.
 #[derive(Clone, Debug, Serialize)]
@@ -608,6 +616,8 @@ impl Analyzer {
 
         let mut rows = Vec::with_capacity(organisms.len());
         let mut sizes = Vec::with_capacity(organisms.len());
+        let mut core_x_hist = vec![0u32; CORE_X_BINS];
+        let width = grid.width.max(1);
         let mut core_cells = 0;
         let mut parasite_cells = 0;
         let mut max_persistence = 0.0f64;
@@ -671,12 +681,21 @@ impl Analyzer {
             core_cells += org.core.len();
             parasite_cells += org.parasites.len();
             sizes.push(org.core.len());
+            let (mut sx, mut sy) = (0.0f64, 0.0f64);
+            for &c in &org.core {
+                let x = c as usize % width;
+                sx += x as f64;
+                sy += (c as usize / width) as f64;
+                core_x_hist[x * CORE_X_BINS / width] += 1;
+            }
             rows.push(OrganismRow {
                 id: self.tracked[ti].id,
                 core_size: org.core.len(),
                 dependents: org.dependents.len(),
                 parasites: org.parasites.len(),
                 anchor: org.core[0],
+                cx: sx / org.core.len() as f64,
+                cy: sy / org.core.len() as f64,
                 mi_region: est.mi,
                 mi_random: mi_rand,
                 persistence,
@@ -736,6 +755,7 @@ impl Analyzer {
                 sizes,
                 max_persistence,
                 background_stability,
+                core_x_hist,
                 repair_edges: edges.len(),
                 organisms: rows,
             },

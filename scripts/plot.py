@@ -187,6 +187,52 @@ def main():
         plt.close(fig)
         lines.append("")
 
+    # --- Ramp experiments: substrate-level view, core cells vs noise rate -----------
+    if ramp:
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+        lines += ["## Extinction under the noise ramp", "",
+                  "Per seed: the noise rate at the last frame that still had an SCC of the given size. Median (min–max) over seeds.",
+                  "", "| experiment | extinction noise, any SCC (>= min_size) | extinction noise, SCC >= 10 cells | "
+                  "extinction noise, SCC >= 100 cells | noise where mean core cells first < 1% of grid |",
+                  "|---|---|---|---|---|"]
+        for name, (frames, lives, _) in ramp.items():
+            by_noise = defaultdict(list)
+            for r in frames:
+                by_noise[round(r["noise_rate"], 5)].append(r)
+            xs = sorted(by_noise)
+            core = np.array([np.mean([r["core_cells"] for r in by_noise[x]]) for x in xs])
+            norg = np.array([np.mean([r["n_organisms"] for r in by_noise[x]]) for x in xs])
+            axes[0].plot(xs, core, label=name)
+            axes[1].plot(xs, norg, label=name)
+            w = grid_width(exps[name], width_default)
+            n_cells = w * w
+            # First noise level after the peak at which the SCC cores hold < 1% of the grid.
+            peak = int(np.argmax(core))
+            first_low = next((x for x, c in zip(xs[peak:], core[peak:]) if c < 0.01 * n_cells), None)
+
+            def extinction(min_size):
+                vals = []
+                for seed in {r["seed"] for r in frames}:
+                    fs = [r for r in frames if r["seed"] == seed and r["sizes"] and max(r["sizes"]) >= min_size]
+                    vals.append(max(fs, key=lambda r: r["tick"])["noise_rate"] if fs else 0.0)
+                vals = np.array(vals)
+                return f"{np.median(vals):.4f} ({vals.min():.4f}–{vals.max():.4f})"
+
+            lines.append(
+                f"| {name} | {extinction(1)} | {extinction(10)} | {extinction(100)} | "
+                f"{('%.4f' % first_low) if first_low is not None else 'never'} |"
+            )
+        axes[0].set_xlabel("noise rate")
+        axes[0].set_ylabel("mean cells in SCC cores")
+        axes[1].set_xlabel("noise rate")
+        axes[1].set_ylabel("mean candidate organisms")
+        axes[0].legend(fontsize=8)
+        axes[1].legend(fontsize=8)
+        fig.tight_layout()
+        fig.savefig(os.path.join(out, "ramp_core_vs_noise.png"), dpi=120)
+        plt.close(fig)
+        lines.append("")
+
     # --- Lifetimes ----------------------------------------------------------------
     fig, ax = plt.subplots(figsize=(8, 4.5))
     lines += ["## Lifetimes", "", "| experiment | organisms | median lifetime (ticks) | p90 | max | still alive at end | max size ever |",
@@ -211,19 +257,40 @@ def main():
     plt.close(fig)
     lines.append("")
 
-    # --- Localisation: where along x do organisms sit? ----------------------------
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    # --- Localisation: where along x (the sun gradient) do organisms sit? ----------
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
     lines += ["## Localisation along the sun gradient (x)", "",
-              "| experiment | mean x of organism anchors (fraction of width) | std |", "|---|---|---|"]
+              "Core-cell density: fraction of all SCC-core cells (over all frames) per x band. "
+              "Centroid columns use per-organism mean x, weighted by core size; older outputs fall back to the anchor.", "",
+              "| experiment | core cells in darkest quarter | second | third | brightest quarter | "
+              "size-weighted mean x of organisms | mean x of small organisms (<20 cells) |", "|---|---|---|---|---|---|---|"]
     for name, (frames, _, _) in data.items():
         w = grid_width(exps[name], width_default)
-        xs = np.array([(o["anchor"] % w) / w for r in frames for o in r["organisms"]])
+        hists = [r["core_x_hist"] for r in frames if r.get("core_x_hist")]
+        if hists:
+            h = np.sum(np.array(hists, dtype=float), axis=0)
+            nb = len(h)
+            quarters = [h[i * nb // 4:(i + 1) * nb // 4].sum() / max(h.sum(), 1) for i in range(4)]
+            centers = (np.arange(nb) + 0.5) / nb
+            axes[0].plot(centers, h / max(h.sum(), 1) * nb, label=name)
+        else:
+            quarters = [float("nan")] * 4
+        xs = np.array([o.get("cx", o["anchor"] % w) / w for r in frames for o in r["organisms"]])
+        ws = np.array([o["core_size"] for r in frames for o in r["organisms"]], dtype=float)
+        small = np.array([o.get("cx", o["anchor"] % w) / w for r in frames for o in r["organisms"] if o["core_size"] < 20])
         if len(xs):
-            ax.hist(xs, bins=32, range=(0, 1), histtype="step", density=True, label=name)
-            lines.append(f"| {name} | {xs.mean():.3f} | {xs.std():.3f} |")
-    ax.set_xlabel("x / width  (linear sun: 0 = dark, 1 = bright)")
-    ax.set_ylabel("density of organism anchors")
-    ax.legend(fontsize=8)
+            axes[1].hist(xs, bins=32, range=(0, 1), weights=ws, histtype="step", density=True, label=name)
+            wmean = np.average(xs, weights=ws)
+            lines.append(
+                f"| {name} | {quarters[0]:.3f} | {quarters[1]:.3f} | {quarters[2]:.3f} | {quarters[3]:.3f} | "
+                f"{wmean:.3f} | {small.mean() if len(small) else float('nan'):.3f} |"
+            )
+    axes[0].set_xlabel("x / width  (linear sun: 0 = dark, 1 = bright)")
+    axes[0].set_ylabel("SCC-core cell density (1 = uniform)")
+    axes[1].set_xlabel("organism centroid x / width")
+    axes[1].set_ylabel("density, weighted by core size")
+    axes[0].legend(fontsize=8)
+    axes[1].legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(os.path.join(out, "localisation.png"), dpi=120)
     plt.close(fig)

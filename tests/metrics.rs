@@ -5,7 +5,7 @@
 use autopoiesis::config::{SimConfig, SunProfile};
 use autopoiesis::grid::{Grid, S};
 use autopoiesis::isa::Instruction;
-use autopoiesis::metrics::{Analyzer, find_organisms};
+use autopoiesis::metrics::Analyzer;
 use autopoiesis::sim::Sim;
 use rand::SeedableRng;
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -150,7 +150,7 @@ fn seeded_band_in_a_live_sim_is_detected_and_measured() {
     let mut an = Analyzer::new(&c, 4);
     let mut frames_checked = 0;
     while sim.tick <= 200 {
-        if sim.tick % c.analysis_every == 0 {
+        if sim.tick.is_multiple_of(c.analysis_every) {
             let edges = sim.repair_edges();
             let rep = an.observe(sim.tick, sim.noise_rate(), &sim.cur, &edges);
             if sim.tick >= 100 {

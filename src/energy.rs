@@ -125,10 +125,10 @@ pub fn diffuse(cfg: &SimConfig, topo: &Topology, grid: &mut Grid, scratch: &mut 
         }
     }
     let cap = cfg.energy_cap as u32;
-    for i in 0..n {
-        if scratch[i] > 0 {
-            let e = grid.cells[i].energy as u32 + scratch[i];
-            grid.cells[i].energy = e.min(cap) as u16;
+    for (cell, &inflow) in grid.cells.iter_mut().zip(scratch.iter()) {
+        if inflow > 0 {
+            let e = cell.energy as u32 + inflow;
+            cell.energy = e.min(cap) as u16;
         }
     }
 }

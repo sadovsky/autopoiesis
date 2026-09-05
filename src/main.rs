@@ -330,7 +330,7 @@ fn run_one(cfg: &SimConfig, a: &RunArgs, metrics: Option<&mut Jsonl>, quiet: boo
         elapsed_s: start.elapsed().as_secs_f64(),
         interrupted: quit,
     };
-    if let Some(sink) = metrics.as_deref_mut() {
+    if let Some(sink) = metrics {
         sink.write(&summary)?;
         sink.flush()?;
     }
