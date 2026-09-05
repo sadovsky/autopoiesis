@@ -44,6 +44,8 @@ pub struct World {
     pub nodes: BTreeMap<NodeId, Node>,
     pub stats: Stats,
     pub transport: Box<dyn Transport>,
+    /// The slice of the id space this world holds. Everything else is another process's.
+    owns: std::ops::Range<NodeId>,
     /// Nodes a phage damaged this tick, so a death can name its cause.
     lysed: BTreeSet<NodeId>,
     next_id: NodeId,
@@ -63,12 +65,29 @@ impl World {
     /// The same world over a different network. `tcp.rs` hands in a socket-backed
     /// transport; the tick loop cannot tell the difference.
     pub fn with_transport(cfg: HgtConfig, seed: u64, transport: Box<dyn Transport>) -> Result<World> {
+        World::with_deme(cfg, seed, transport, 0..NodeId::MAX)
+    }
+
+    /// A deme: the same world, holding only the nodes in `owns`. Over TCP each process
+    /// owns one stripe of the id space (`tcp::ID_STRIDE`), which is how an envelope finds
+    /// the process holding its recipient without a registry.
+    ///
+    /// The distinction matters for one thing beyond addressing: a node id outside `owns`
+    /// belongs to another process, so this world cannot know whether it is still alive
+    /// and must not treat "not in my node table" as "dead".
+    pub fn with_deme(
+        cfg: HgtConfig,
+        seed: u64,
+        transport: Box<dyn Transport>,
+        owns: std::ops::Range<NodeId>,
+    ) -> Result<World> {
         cfg.validate()?;
+        let id_base = owns.start;
         let env = Environment::new(&cfg, seed);
         let mut rng = Rng::seed_from_u64(seed);
         let mut nodes: BTreeMap<NodeId, Node> = BTreeMap::new();
 
-        for id in 0..cfg.nodes as NodeId {
+        for id in id_base..id_base + cfg.nodes as NodeId {
             let strain = rng.random_range(0..cfg.strains);
             let mut node = Node::new(id, strain, cfg.energy_init, 0, None);
             node.genome.insert(founder_gene(&env, 0));
@@ -96,7 +115,7 @@ impl World {
             nodes.get_mut(&me).expect("founder exists").peers = peers;
         }
 
-        let next_id = cfg.nodes as NodeId;
+        let next_id = id_base + cfg.nodes as NodeId;
         let peak_population = nodes.len();
         Ok(World {
             cfg,
@@ -106,10 +125,35 @@ impl World {
             nodes,
             stats: Stats { peak_population, ..Stats::default() },
             transport,
+            owns,
             lysed: BTreeSet::new(),
             next_id,
             rng,
         })
+    }
+
+    /// Add nodes from other processes to local peer lists, so the demes are one network
+    /// rather than several. Each local node learns `per_node` of them.
+    pub fn introduce(&mut self, remote: &[NodeId], per_node: usize) {
+        if remote.is_empty() {
+            return;
+        }
+        let ids: Vec<NodeId> = self.nodes.keys().copied().collect();
+        for id in ids {
+            for _ in 0..per_node {
+                let pick = remote[self.rng.random_range(0..remote.len())];
+                if let Some(n) = self.nodes.get_mut(&id)
+                    && !n.peers.contains(&pick)
+                {
+                    n.peers.push(pick);
+                }
+            }
+        }
+    }
+
+    /// Is this node one of ours? Anything else lives in another process.
+    fn is_local(&self, id: NodeId) -> bool {
+        self.owns.contains(&id)
     }
 
     pub fn population(&self) -> usize {
@@ -321,7 +365,7 @@ impl World {
             .peers
             .iter()
             .copied()
-            .filter(|p| *p != id && self.nodes.contains_key(p))
+            .filter(|p| *p != id && (!self.is_local(*p) || self.nodes.contains_key(p)))
             .collect();
         if !live.is_empty() {
             return Some(live[self.rng.random_range(0..live.len())]);
@@ -483,8 +527,12 @@ impl World {
         if self.cfg.mechanisms.transformation {
             let genes: Vec<Gene> = node.genome.mobile().map(|c| c.gene.clone()).collect();
             if !genes.is_empty() {
-                let live: Vec<NodeId> =
-                    node.peers.iter().copied().filter(|p| self.nodes.contains_key(p)).collect();
+                let live: Vec<NodeId> = node
+                    .peers
+                    .iter()
+                    .copied()
+                    .filter(|p| !self.is_local(*p) || self.nodes.contains_key(p))
+                    .collect();
                 for peer in live {
                     let msg = Message::Eulogy { strain: node.strain, genes: genes.clone() };
                     self.transport.send(Envelope::new(id, peer, msg));

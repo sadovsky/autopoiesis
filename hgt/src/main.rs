@@ -6,12 +6,16 @@ use hgt::config::{HgtConfig, Mechanisms};
 use hgt::event::Event;
 use hgt::metrics::{Analyzer, Record};
 use hgt::node::Policy;
+use hgt::tcp::{ID_STRIDE, TcpTransport, founder_ids, id_base};
 use hgt::world::World;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
 use std::sync::Mutex;
 
 #[derive(Parser, Debug)]
@@ -99,6 +103,35 @@ enum Cmd {
     /// which genes are resistance genes, is a function of both.
     Analyze {
         file: PathBuf,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// One process holding one deme, talking to the others over TCP. Started by `arena`,
+    /// but runnable by hand: several of these on one machine (or several machines) are a
+    /// real network of programs trading genes.
+    Node {
+        /// This process's index. Its nodes are numbered from `index * 2^24`.
+        #[arg(long)]
+        index: u32,
+        /// Address to listen on.
+        #[arg(long)]
+        listen: SocketAddr,
+        /// Every process's address, in index order — including this one.
+        #[arg(long, value_delimiter = ',')]
+        peers: Vec<SocketAddr>,
+        /// Milliseconds per tick. Real messages need real time to arrive.
+        #[arg(long, default_value_t = 5)]
+        tick_ms: u64,
+    },
+    /// Spawn `processes` node processes on localhost and watch them trade genes.
+    Arena {
+        #[arg(long, default_value_t = 4)]
+        processes: u32,
+        #[arg(long, default_value_t = 9000)]
+        base_port: u16,
+        #[arg(long, default_value_t = 5)]
+        tick_ms: u64,
+        /// Where to put the shared config and each process's metrics.
         #[arg(long)]
         out: Option<PathBuf>,
     },
@@ -401,6 +434,176 @@ fn sweep(cfg: HgtConfig, a: &RunArgs, seeds: &[u64], out: &Path, jobs: Option<us
     Ok(())
 }
 
+
+/// What a node process reports when it is done. Printed as one JSON line on stdout so
+/// the arena — or a shell pipeline — can read it.
+#[derive(Serialize, serde::Deserialize, Debug, Clone)]
+struct NodeSummary {
+    /// A `String`, not a `&'static str` like the other records: the arena reads these
+    /// back off its children's stdout, so this one has to deserialize.
+    kind: String,
+    index: u32,
+    seed: u64,
+    ticks: u32,
+    population: usize,
+    births: u64,
+    deaths: u64,
+    /// Acquisitions whose donor was a node in another process: genes that crossed a
+    /// socket. This is the number the whole TCP path exists to produce.
+    from_other_processes: u64,
+    acquisitions: u64,
+    /// Envelopes this process handed to the network, and ones it could not deliver.
+    sent: u64,
+    dropped: u64,
+}
+
+fn node(cfg: HgtConfig, a: &RunArgs, index: u32, listen: SocketAddr, peers: &[SocketAddr], tick_ms: u64) -> Result<()> {
+    let transport = TcpTransport::bind(index, listen, peers.to_vec())
+        .with_context(|| format!("process {index} listening on {listen}"))?;
+    let base = id_base(index);
+    let mut world =
+        World::with_deme(cfg.clone(), a.seed, Box::new(transport), base..base + ID_STRIDE)?;
+    // Every process can work out its peers' founders, so the demes start connected
+    // without a coordinator to introduce them.
+    let remote: Vec<u32> = (0..peers.len() as u32)
+        .filter(|i| *i != index)
+        .flat_map(|i| founder_ids(i, cfg.nodes))
+        .collect();
+    world.introduce(&remote, 2);
+
+    let mut analyzer = Analyzer::new(&cfg, a.seed);
+    let mut out = Collector {
+        metrics: a.metrics.as_deref().map(Jsonl::file).transpose()?,
+        report_every: cfg.report_every,
+        epochs_survived: 0,
+        rescue_ticks: Vec::new(),
+        lateral_share: 0.0,
+    };
+    let (mut foreign, mut acquisitions) = (0u64, 0u64);
+
+    for e in world.founding_events() {
+        out.take(analyzer.observe(&e))?;
+    }
+    for _ in 0..a.ticks {
+        for e in world.step() {
+            if let Event::Acquire { from: Some(donor), .. } = &e {
+                acquisitions += 1;
+                if donor / ID_STRIDE != index {
+                    foreign += 1;
+                }
+            }
+            out.take(analyzer.observe(&e))?;
+        }
+        if world.extinct() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(tick_ms));
+    }
+    out.take(analyzer.finish())?;
+    if let Some(m) = &mut out.metrics {
+        m.flush()?;
+    }
+
+    let (sent, dropped) = world.transport.counts();
+    let summary = NodeSummary {
+        kind: "node".to_string(),
+        index,
+        seed: a.seed,
+        ticks: world.tick,
+        population: world.population(),
+        births: world.stats.births,
+        deaths: world.stats.deaths,
+        from_other_processes: foreign,
+        acquisitions,
+        sent,
+        dropped,
+    };
+    println!("{}", serde_json::to_string(&summary)?);
+    Ok(())
+}
+
+fn arena(cfg: &HgtConfig, a: &RunArgs, processes: u32, base_port: u16, tick_ms: u64, out: Option<&Path>) -> Result<()> {
+    let dir = match out {
+        Some(p) => p.to_path_buf(),
+        None => std::env::temp_dir().join(format!("hgt-arena-{}", std::process::id())),
+    };
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    // Every process shares the seed, because the stressor schedule is derived from it
+    // and the demes have to be facing the same world. Only process 0 is founded with the
+    // genes for the *later* stressors: everyone else must get them across a socket or
+    // die at the shift. That is the experiment.
+    let mut cfgs = Vec::new();
+    for i in 0..processes {
+        let mut c = cfg.clone();
+        if i > 0 {
+            c.founder_carriers = 0;
+        }
+        let path = dir.join(format!("config_{i}.json"));
+        fs::write(&path, serde_json::to_string_pretty(&c)? + "\n")?;
+        cfgs.push(path);
+    }
+
+    let addrs: Vec<String> =
+        (0..processes).map(|i| format!("127.0.0.1:{}", base_port + i as u16)).collect();
+    let peer_list = addrs.join(",");
+    let exe = std::env::current_exe().context("finding this executable")?;
+
+    eprintln!(
+        "arena: {processes} processes, {} founders each, {} ticks at {tick_ms}ms -> {}",
+        cfg.nodes,
+        a.ticks,
+        dir.display()
+    );
+    let mut children = Vec::new();
+    for i in 0..processes {
+        let child = Command::new(&exe)
+            .arg("--config").arg(&cfgs[i as usize])
+            .arg("--seed").arg(a.seed.to_string())
+            .arg("--ticks").arg(a.ticks.to_string())
+            .arg("--metrics").arg(dir.join(format!("node_{i}.jsonl")))
+            .arg("node")
+            .arg("--index").arg(i.to_string())
+            .arg("--listen").arg(&addrs[i as usize])
+            .arg("--peers").arg(&peer_list)
+            .arg("--tick-ms").arg(tick_ms.to_string())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .with_context(|| format!("spawning node {i}"))?;
+        children.push(child);
+    }
+
+    let mut crossed = 0u64;
+    let mut alive = 0usize;
+    let mut failures = Vec::new();
+    for (i, child) in children.into_iter().enumerate() {
+        let output = child.wait_with_output().with_context(|| format!("waiting for node {i}"))?;
+        if !output.status.success() {
+            failures.push(format!("node {i} exited with {}", output.status));
+            continue;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let s: NodeSummary = match serde_json::from_str(line) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            crossed += s.from_other_processes;
+            alive += s.population;
+            println!(
+                "process {}: {} nodes, {} acquisitions ({} from another process), \
+                 {} envelopes sent, {} undeliverable",
+                s.index, s.population, s.acquisitions, s.from_other_processes, s.sent, s.dropped
+            );
+        }
+    }
+    println!("{alive} nodes alive; {crossed} genes crossed a socket");
+    if !failures.is_empty() {
+        bail!("{}", failures.join("\n"));
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = build_config(&cli.run)?;
@@ -410,6 +613,12 @@ fn main() -> Result<()> {
     }
     match &cli.cmd {
         Some(Cmd::Analyze { file, out }) => analyze(&cfg, cli.run.seed, file, out.as_deref()),
+        Some(Cmd::Node { index, listen, peers, tick_ms }) => {
+            node(cfg, &cli.run, *index, *listen, peers, *tick_ms)
+        }
+        Some(Cmd::Arena { processes, base_port, tick_ms, out }) => {
+            arena(&cfg, &cli.run, *processes, *base_port, *tick_ms, out.as_deref())
+        }
         Some(Cmd::Sweep { seeds, out, jobs }) => {
             let seeds = parse_seeds(seeds)?;
             sweep(cfg, &cli.run, &seeds, out, *jobs)
