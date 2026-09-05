@@ -4,7 +4,8 @@
 # metrics as scripts/sweep.sh; the original baseline is symlinked in for comparison.
 #
 # Environment overrides: SEEDS (default 0..20), TICKS (100000), OUT (results/variants),
-# JOBS (nproc), ONLY (subset of: register previous notrap scarce combined combined_prev).
+# JOBS (nproc), ONLY (subset of: register previous notrap scarce combined combined_prev
+#                          tiling_ramp tiling_copyself).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -12,7 +13,7 @@ SEEDS=${SEEDS:-0..20}
 TICKS=${TICKS:-100000}
 OUT=${OUT:-results/variants}
 JOBS=${JOBS:-$(nproc)}
-ONLY=${ONLY:-"register previous notrap scarce combined combined_prev"}
+ONLY=${ONLY:-"register previous notrap scarce combined combined_prev tiling_ramp tiling_copyself"}
 
 cargo build --release --quiet
 BIN=target/release/autopoiesis
@@ -41,5 +42,11 @@ run scarce --sun 3
 # 4. All three together, with each template variant.
 run combined --repair-source register --no-self-jump --sun 3
 run combined_prev --repair-source previous --no-self-jump --sun 3
+
+# 5. A hand-designed template-repairing structure (see inject_tiling) under a noise
+#    ramp: the noise level at which it dissolves is its vitality. Sun stays at 4 so the
+#    Load(N) cells (3 energy/tick) are affordable at the bright edge. Copy-self control.
+run tiling_ramp --repair-source register --no-self-jump --seed-tiling --noise-ramp "0.0:0.002:$TICKS"
+run tiling_copyself --seed-tiling --noise-ramp "0.0:0.002:$TICKS"
 
 python3 scripts/plot.py "$OUT"
