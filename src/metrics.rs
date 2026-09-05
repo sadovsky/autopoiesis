@@ -490,6 +490,10 @@ pub struct FrameRecord {
     pub background_stability: f64,
     /// Number of SCC-core cells per column band: `CORE_X_BINS` equal bins across x.
     pub core_x_hist: Vec<u32>,
+    /// Fraction of bytes unchanged over the lag, per x band (`CORE_X_BINS` bins over
+    /// all cells, not just the background). In a `repair_source = none` run this is
+    /// the null-twin baseline for stability at each energy niche.
+    pub stability_x_hist: Vec<f64>,
     pub repair_edges: usize,
     pub organisms: Vec<OrganismRow>,
 }
@@ -578,6 +582,7 @@ pub struct Analyzer {
     topo: Topology,
     history: VecDeque<(u32, Grid)>,
     tracked: Vec<Tracked>,
+    last_organisms: Vec<(u64, Vec<u32>)>,
     next_id: u64,
     rng: Xoshiro256PlusPlus,
     last_tick: Option<u32>,
@@ -591,11 +596,17 @@ impl Analyzer {
             seed,
             history: VecDeque::new(),
             tracked: Vec::new(),
+            last_organisms: Vec::new(),
             next_id: 0,
             // Decoupled from the sim's RNG so metrics never perturb the run.
             rng: Xoshiro256PlusPlus::seed_from_u64(seed ^ 0x5eed_0fba_5e1e_5000),
             last_tick: None,
         }
+    }
+
+    /// `(id, core cells)` of every organism in the most recent frame, in row order.
+    pub fn last_organisms(&self) -> &[(u64, Vec<u32>)] {
+        &self.last_organisms
     }
 
     pub fn tracked_count(&self) -> usize {
@@ -632,6 +643,19 @@ impl Analyzer {
             let all: Vec<u32> = (0..n as u32).collect();
             let all = subsample(&all, self.cfg.mi_max_cells.max(1) * 4);
             mutual_information(&all, &pairs, 0, &mut self.rng).stability
+        };
+        let stability_x_hist = {
+            let w = grid.width.max(1);
+            let mut same = vec![0u64; CORE_X_BINS];
+            let mut tot = vec![0u64; CORE_X_BINS];
+            for &(past, now) in &pairs {
+                for i in 0..n {
+                    let b = (i % w) * CORE_X_BINS / w;
+                    tot[b] += 1;
+                    same[b] += (past.cells[i].instr == now.cells[i].instr) as u64;
+                }
+            }
+            same.iter().zip(&tot).map(|(&s, &t)| if t == 0 { 0.0 } else { s as f64 / t as f64 }).collect::<Vec<f64>>()
         };
 
         // Match to tracked organisms by Jaccard >= 0.5 (greedy, best first).
@@ -799,6 +823,12 @@ impl Analyzer {
         deaths.sort_by_key(|d| d.organism_id);
         sizes.sort_unstable_by(|a, b| b.cmp(a));
 
+        self.last_organisms = organisms
+            .iter()
+            .zip(&rows)
+            .map(|(o, r)| (r.id, o.core.clone()))
+            .collect();
+
         FrameReport {
             frame: FrameRecord {
                 kind: "frame",
@@ -815,6 +845,7 @@ impl Analyzer {
                 persistence_hist,
                 background_stability,
                 core_x_hist,
+                stability_x_hist,
                 repair_edges: edges.len(),
                 organisms: rows,
             },

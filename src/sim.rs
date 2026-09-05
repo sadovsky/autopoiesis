@@ -1,6 +1,6 @@
 //! The run loop: double-buffered grid, VM step, noise, energy, repair log.
 
-use crate::config::SimConfig;
+use crate::config::{SimConfig, TilingPattern};
 use crate::energy::{self, SunField};
 use crate::grid::{Grid, Topology};
 use crate::isa::Instruction;
@@ -249,7 +249,10 @@ pub fn inject_tiling(cfg: &SimConfig, grid: &mut Grid) {
         None => energy::brightest_column(cfg).saturating_sub(w / 2).min(cfg.width - w),
     };
     let a = Instruction::Repair(crate::grid::S).encode();
-    let b = Instruction::Load(crate::grid::N).encode();
+    let b = match cfg.seed_tiling_pattern {
+        TilingPattern::Register => Instruction::Load(crate::grid::N).encode(),
+        TilingPattern::PassThrough => Instruction::Repair(crate::grid::N).encode(),
+    };
     for dx in 0..w {
         let x = (x0 + dx) % cfg.width;
         for y in 0..cfg.height {

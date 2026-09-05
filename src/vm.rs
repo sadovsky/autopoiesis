@@ -18,7 +18,9 @@
 //!
 //! What `Repair(d)` writes is `cfg.repair_source`: the cell's own byte (`copy_self`,
 //! the plan's original), its `reg` (`register`), or the byte of the neighbourhood slot
-//! executed just before the `Repair` (`previous`, the plan's §8 alternative). The tag
+//! executed just before the `Repair` (`previous`, the plan's §8 alternative), the byte
+//! of the neighbour opposite to `d` (`opposite`, pass-through), or nothing at all
+//! (`none`: the null twin — Repair costs but never writes and logs no edge). The tag
 //! is always the repairer's.
 //!
 //! All reads come from `cur`; all writes go to `next`, which starts as a copy of
@@ -129,17 +131,21 @@ impl Vm {
                 Instruction::Repair(d) => {
                     let t = topo.neighbor(i, d);
                     let byte = match cfg.repair_source {
-                        RepairSource::CopySelf => c.instr,
-                        RepairSource::Register => c.reg,
+                        RepairSource::CopySelf => Some(c.instr),
+                        RepairSource::Register => Some(c.reg),
                         RepairSource::Previous => {
                             let prev = (ip + NEIGHBORHOOD - 1) % NEIGHBORHOOD;
                             let p = if prev == 0 { i } else { topo.neighbor(i, prev - 1) };
-                            cur.cells[p].instr
+                            Some(cur.cells[p].instr)
                         }
+                        RepairSource::Opposite => Some(cur.cells[topo.neighbor(i, (d + 4) & 7)].instr),
+                        RepairSource::None => None,
                     };
-                    self.propose_write(t, c.energy, byte, Some(c.tag), &mut stats);
-                    repairs.push((i as u32, d & 7));
-                    stats.repairs += 1;
+                    if let Some(byte) = byte {
+                        self.propose_write(t, c.energy, byte, Some(c.tag), &mut stats);
+                        repairs.push((i as u32, d & 7));
+                        stats.repairs += 1;
+                    }
                 }
                 Instruction::Cmp(d) => {
                     next.cells[i].reg = (cur.cells[topo.neighbor(i, d)].instr == c.instr) as u8;

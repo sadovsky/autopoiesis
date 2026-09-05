@@ -8,6 +8,7 @@ pub mod grid;
 pub mod isa;
 pub mod metrics;
 pub mod noise;
+pub mod probe;
 pub mod render;
 pub mod sim;
 pub mod snapshot;

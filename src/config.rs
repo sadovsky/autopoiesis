@@ -31,6 +31,25 @@ pub enum RepairSource {
     /// cell executed one step before the `Repair` byte (ip − 1). Structures are
     /// (template, Repair) pairs in neighbourhood order.
     Previous,
+    /// `nbr(d).instr = nbr(opposite(d)).instr` — pass-through: the cell relays the byte
+    /// behind it to the cell in front of it. No register involved.
+    Opposite,
+    /// `Repair` costs energy but writes nothing and creates no repair edge. The "null
+    /// twin" of a configuration: the same world without maintenance.
+    None,
+}
+
+/// Which hand-written template structure `seed_tiling` injects.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TilingPattern {
+    /// Rows alternate `Repair(S)` / `Load(N)`; needs `repair_source = register`.
+    Register,
+    /// Rows alternate `Repair(S)` / `Repair(N)`; needs `repair_source = opposite`. Each
+    /// cell relays its north neighbour's byte to its south neighbour (or the mirror),
+    /// so every byte is restored from an independent copy two rows away with no
+    /// register in the loop.
+    PassThrough,
 }
 
 /// Energy debited per executed instruction.
@@ -209,6 +228,21 @@ pub struct SimConfig {
     /// Width in columns of the seeded tiling band, centred on the brightest column
     /// unless `seed_ring_x` is set (then it starts there). Default 8.
     pub seed_tiling_width: usize,
+    /// Which template structure `seed_tiling` injects. Default register.
+    pub seed_tiling_pattern: TilingPattern,
+    /// Perturbation probe: every this many ticks (a multiple of `analysis_every`; 0 =
+    /// off), overwrite `probe_k` random core bytes of up to `probe_max_organisms`
+    /// tracked organisms (size ≥ `probe_min_size`) and, for each, one background byte
+    /// in the same column; record the fraction restored after 1, 2 and 5 windows.
+    /// This is the direct test of "actively maintains its encoding". Perturbs the run
+    /// (deterministically). Default 0.
+    pub probe_every: u32,
+    /// Bytes overwritten per probed organism. Default 8.
+    pub probe_k: usize,
+    /// Smallest organism probed. Default 10.
+    pub probe_min_size: usize,
+    /// Largest organisms (by core size) probed per probe tick. Default 5.
+    pub probe_max_organisms: usize,
 }
 
 impl Default for SimConfig {
@@ -250,6 +284,11 @@ impl Default for SimConfig {
             seed_ring_width: 1,
             seed_tiling: false,
             seed_tiling_width: 8,
+            seed_tiling_pattern: TilingPattern::Register,
+            probe_every: 0,
+            probe_k: 8,
+            probe_min_size: 10,
+            probe_max_organisms: 5,
         }
     }
 }
@@ -304,12 +343,18 @@ impl SimConfig {
         if self.seed_ring_width == 0 {
             bail!("seed_ring_width must be > 0");
         }
+        if self.probe_every > 0 && !self.probe_every.is_multiple_of(self.analysis_every) {
+            bail!("probe_every must be a multiple of analysis_every");
+        }
+        if self.probe_every > 0 && !self.window.is_multiple_of(self.analysis_every) {
+            bail!("probing needs window to be a multiple of analysis_every");
+        }
         if self.seed_tiling {
             if self.seed_tiling_width == 0 || self.seed_tiling_width > self.width {
                 bail!("seed_tiling_width must be in 1..=width");
             }
             if !self.height.is_multiple_of(2) {
-                bail!("seed_tiling needs an even height (rows alternate Repair(S)/Load(N))");
+                bail!("seed_tiling needs an even height (rows alternate two classes)");
             }
         }
         Ok(())

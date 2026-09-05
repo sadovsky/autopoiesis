@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
-use autopoiesis::config::{NoiseRamp, RepairSource, SimConfig, SunProfile};
+use autopoiesis::config::{NoiseRamp, RepairSource, SimConfig, SunProfile, TilingPattern};
+use autopoiesis::probe::Prober;
 use autopoiesis::metrics::Analyzer;
 use autopoiesis::render::{Renderer, ShowMode};
 use autopoiesis::sim::Sim;
@@ -77,6 +78,18 @@ struct RunArgs {
     /// Width in columns of the seeded tiling band.
     #[arg(long)]
     seed_tiling_width: Option<usize>,
+    /// Which template structure --seed-tiling injects.
+    #[arg(long, value_enum)]
+    seed_tiling_pattern: Option<TilingPatternArg>,
+    /// Perturbation probe every N ticks (0 = off); see SimConfig::probe_every.
+    #[arg(long)]
+    probe_every: Option<u32>,
+    /// Bytes overwritten per probed organism.
+    #[arg(long)]
+    probe_k: Option<usize>,
+    /// Smallest organism probed.
+    #[arg(long)]
+    probe_min_size: Option<usize>,
     /// Print the effective config as JSON and exit.
     #[arg(long)]
     dump_config: bool,
@@ -113,6 +126,8 @@ struct RunArgs {
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum RepairSourceArg {
+    Opposite,
+    None,
     CopySelf,
     Register,
     Previous,
@@ -123,6 +138,12 @@ enum SunProfileArg {
     Linear,
     Gaussian,
     Uniform,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum TilingPatternArg {
+    Register,
+    PassThrough,
 }
 
 #[derive(Subcommand, Debug)]
@@ -186,6 +207,8 @@ fn build_config(a: &RunArgs) -> Result<SimConfig> {
             RepairSourceArg::CopySelf => RepairSource::CopySelf,
             RepairSourceArg::Register => RepairSource::Register,
             RepairSourceArg::Previous => RepairSource::Previous,
+            RepairSourceArg::Opposite => RepairSource::Opposite,
+            RepairSourceArg::None => RepairSource::None,
         };
     }
     if a.no_self_jump {
@@ -205,6 +228,21 @@ fn build_config(a: &RunArgs) -> Result<SimConfig> {
     }
     if let Some(w) = a.seed_tiling_width {
         cfg.seed_tiling_width = w;
+    }
+    if let Some(p) = a.seed_tiling_pattern {
+        cfg.seed_tiling_pattern = match p {
+            TilingPatternArg::Register => TilingPattern::Register,
+            TilingPatternArg::PassThrough => TilingPattern::PassThrough,
+        };
+    }
+    if let Some(p) = a.probe_every {
+        cfg.probe_every = p;
+    }
+    if let Some(k) = a.probe_k {
+        cfg.probe_k = k;
+    }
+    if let Some(m) = a.probe_min_size {
+        cfg.probe_min_size = m;
     }
     if let Some(s) = a.snapshot_every {
         cfg.snapshot_every = s;
@@ -276,6 +314,7 @@ fn run_one(cfg: &SimConfig, a: &RunArgs, metrics: Option<&mut Jsonl>, quiet: boo
         None
     };
     let mut analyzer = metrics.as_ref().map(|_| Analyzer::new(cfg, a.seed));
+    let mut prober = (cfg.probe_every > 0 && metrics.is_some()).then(|| Prober::new(cfg, a.seed));
     let mut metrics = metrics;
     let snapshot_every = cfg.snapshot_every;
     let analysis_every = cfg.analysis_every;
@@ -311,6 +350,14 @@ fn run_one(cfg: &SimConfig, a: &RunArgs, metrics: Option<&mut Jsonl>, quiet: boo
                     sink.write(d)?;
                 }
                 organisms_seen = an.organisms_created();
+                if let Some(p) = &mut prober {
+                    for rec in p.check(t, &sim.cur) {
+                        sink.write(&rec)?;
+                    }
+                    if t > 0 && t % cfg.probe_every == 0 {
+                        p.perturb(t, &mut sim.cur, an.last_organisms());
+                    }
+                }
             }
         }
         if let Some(r) = &mut renderer

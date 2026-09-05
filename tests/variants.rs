@@ -172,3 +172,114 @@ fn closed_loop_template_tiling_is_a_fixed_point_only_under_register_repair() {
     let (frac, _, _) = intact_after(RepairSource::CopySelf, 3000);
     assert!(frac < 0.6, "copy-self should not preserve the tiling, intact {frac}");
 }
+
+#[test]
+fn opposite_repair_relays_the_byte_behind_and_none_writes_nothing() {
+    use autopoiesis::grid::W;
+    // A at (2,2) executes Repair(E) at ip 0. Under `opposite` the byte written east is
+    // the west neighbour's; under `none` nothing is written and no repair is logged.
+    let (cfg, mut g) = quiet_world(RepairSource::Opposite, false);
+    {
+        let c = g.get_mut(2, 2);
+        c.instr = Instruction::Repair(E).encode();
+        c.reg = 0xAB;
+        c.energy = 500;
+    }
+    g.get_mut(1, 2).instr = 0x5A;
+    let mut sim = Sim::with_grid(cfg.clone(), 1, g.clone()).unwrap();
+    sim.step();
+    assert_eq!(sim.cur.get(3, 2).instr, 0x5A, "opposite relays W into E");
+    assert_eq!(sim.stats.repairs, 1);
+    let _ = W;
+
+    let (cfg, _) = quiet_world(RepairSource::None, false);
+    let mut sim = Sim::with_grid(cfg, 1, g).unwrap();
+    let before = sim.cur.get(3, 2).instr;
+    sim.step();
+    assert_eq!(sim.cur.get(3, 2).instr, before, "none writes nothing");
+    assert_eq!(sim.stats.repairs, 0);
+    assert!(sim.repair_edges().is_empty());
+    // …but it still costs the Repair price.
+    assert_eq!(sim.cur.get(2, 2).energy, 500 - 4);
+}
+
+#[test]
+fn pass_through_tiling_is_a_fixed_point_only_under_opposite_repair() {
+    use autopoiesis::config::TilingPattern;
+    let intact_after = |src: RepairSource, ticks: u32| {
+        let cfg = SimConfig {
+            width: 16,
+            height: 16,
+            sun: 4.0,
+            sun_profile: SunProfile::Uniform,
+            noise_rate: 0.0,
+            repair_source: src,
+            seed_tiling: true,
+            seed_tiling_width: 16,
+            seed_tiling_pattern: TilingPattern::PassThrough,
+            ..SimConfig::default()
+        };
+        let reference = Sim::new(cfg.clone(), 3).unwrap().cur.clone();
+        let mut sim = Sim::new(cfg, 3).unwrap();
+        // Check two consecutive ticks: under copy-self the tiling *blinks* (every cell
+        // is overwritten by the other class each tick), so a single even tick matches.
+        sim.run(ticks);
+        let frac = |g: &autopoiesis::grid::Grid| {
+            g.cells.iter().zip(&reference.cells).filter(|(a, b)| a.instr == b.instr).count() as f64 / reference.cells.len() as f64
+        };
+        let f0 = frac(&sim.cur);
+        sim.step();
+        let f1 = frac(&sim.cur);
+        (f0.min(f1), sim.stats.repairs)
+    };
+    let (frac, repairs) = intact_after(RepairSource::Opposite, 3000);
+    assert_eq!(frac, 1.0, "pass-through tiling should be exactly stable");
+    assert!(repairs > 0);
+    let (frac, _) = intact_after(RepairSource::CopySelf, 3000);
+    assert!(frac < 0.8, "copy-self should not preserve the tiling, intact {frac}");
+}
+
+#[test]
+fn probe_records_restoration_for_organism_and_matched_background() {
+    use autopoiesis::grid::Grid;
+    use autopoiesis::probe::Prober;
+    let cfg = SimConfig {
+        width: 8,
+        height: 8,
+        window: 100,
+        probe_every: 100,
+        probe_k: 4,
+        probe_min_size: 4,
+        ..SimConfig::default()
+    };
+    let mut g = Grid::new(8, 8);
+    for (i, c) in g.cells.iter_mut().enumerate() {
+        c.instr = i as u8;
+        c.energy = 10;
+    }
+    let original = g.clone();
+    let core: Vec<u32> = (0..4).map(|y| g.idx(3, y) as u32).collect(); // top half of column 3
+    let mut p = Prober::new(&cfg, 7);
+    p.perturb(100, &mut g, &[(42, core.clone())]);
+    assert_eq!(p.pending(), 1);
+    let changed_core = core.iter().filter(|&&c| g.cells[c as usize].instr != original.cells[c as usize].instr).count();
+    assert!(changed_core >= 3, "probe should overwrite ~k core bytes (got {changed_core}; a random byte can coincide)");
+    // Background cells: in column 3 (same sunlight) but outside the core.
+    let changed_bg: Vec<usize> = (0..64)
+        .filter(|&i| !core.contains(&(i as u32)) && g.cells[i].instr != original.cells[i].instr)
+        .collect();
+    assert!(!changed_bg.is_empty() && changed_bg.iter().all(|&i| i % 8 == 3 && i / 8 >= 4), "{changed_bg:?}");
+    // Restore the organism fully, leave the background broken: 1.0 vs 0.0.
+    for &c in &core {
+        g.cells[c as usize].instr = original.cells[c as usize].instr;
+    }
+    assert!(p.check(150, &g).is_empty(), "no check due before one window");
+    assert!(p.check(200, &g).is_empty(), "record only completes after the 5-window check");
+    let recs = p.check(600, &g);
+    assert_eq!(recs.len(), 1);
+    let r = &recs[0];
+    assert_eq!((r.organism_id, r.core_size, r.tick), (42, 4, 100));
+    assert_eq!(r.restored, [1.0, 1.0, 1.0]);
+    assert!(r.bg_k > 0 && r.bg_restored.iter().all(|&v| v == 0.0));
+    assert_eq!(p.pending(), 0);
+}
